@@ -1,0 +1,115 @@
+name: Fork GitHub App test image
+
+on:
+  pull_request:
+    branches: [test-base/v2026.1012.0]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-github-app-image-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    # This workflow is for this fork only. It must not publish upstream images.
+    if: >-
+      github.repository == 'everlastingcrown/paperclip' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'backport/github-app-installation-auth-2026.1012.0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      IMAGE_TAG: paperclip:2026.1012.0-github-app-${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out the exact PR commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check release ancestry and unchanged database migration history
+        run: |
+          set -euo pipefail
+          release_base=bba6a45f0d364cfd962ac59b3bdf2426a8222adb
+          git merge-base --is-ancestor "$release_base" "$SOURCE_SHA"
+          git diff --exit-code "$release_base" "$SOURCE_SHA" -- packages/db
+          git diff --check "$release_base" "$SOURCE_SHA"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install pinned release dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run focused provider, authorization, and catalog checks
+        env:
+          NODE_OPTIONS: --max-old-space-size=1024
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run --config .github/github-app-vitest.config.mts
+          pnpm check:token-gates
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 2
+
+      - name: Build release production image without registry publication
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64
+          push: false
+          tags: ${{ env.IMAGE_TAG }}
+          outputs: type=docker,dest=${{ runner.temp }}/paperclip-github-app.tar
+          build-args: |
+            PAPERCLIP_BUILD_COMMIT=${{ env.SOURCE_SHA }}
+            PAPERCLIP_BUILD_VERSION=2026.1012.0-github-app
+          # Import only the upstream public immutable-content build cache.
+          cache-from: type=registry,ref=ghcr.io/paperclipai/paperclip:buildcache-amd64
+
+      - name: Record image provenance and compress the Docker archive
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/github-app-image"
+          gzip -1 "$RUNNER_TEMP/paperclip-github-app.tar"
+          mv "$RUNNER_TEMP/paperclip-github-app.tar.gz" "$RUNNER_TEMP/github-app-image/"
+          printf 'source_commit=%s\nrelease_base=%s\nimage_tag=%s\nplatform=linux/amd64\n' \
+            "$SOURCE_SHA" bba6a45f0d364cfd962ac59b3bdf2426a8222adb "$IMAGE_TAG" \
+            > "$RUNNER_TEMP/github-app-image/provenance.txt"
+          cd "$RUNNER_TEMP/github-app-image"
+          sha256sum paperclip-github-app.tar.gz > SHA256SUMS
+          {
+            echo 'Download the artifact and load it locally:'
+            echo '```sh'
+            echo 'sha256sum -c SHA256SUMS'
+            echo 'docker load -i paperclip-github-app.tar.gz'
+            printf 'docker tag %s paperclip:2026.1012.0-github-app\n' "$IMAGE_TAG"
+            echo '```'
+            echo 'This is an experimental image. Live GitHub acceptance and full source checks remain separate.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the image and provenance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: paperclip-2026.1012.0-github-app-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/github-app-image/
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error

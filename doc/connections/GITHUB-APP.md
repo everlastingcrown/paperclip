@@ -101,7 +101,7 @@ try this feature.
 From the backport checkout, build with the release's own Dockerfile:
 
 ```sh
-docker build --progress=plain -t paperclip:2026.1012.0-github-app .
+docker build --target production --progress=plain -t paperclip:2026.1012.0-github-app .
 ```
 
 Use your existing local deployment configuration with that image and a disposable
@@ -110,3 +110,13 @@ image or treat the branch as upstream-ready until typecheck, tests, build,
 release database compatibility, and live acceptance pass. Run large checks and
 Docker builds one at a time on a machine with sufficient resources. A Docker
 Desktop installation must enable WSL integration for the build distro.
+
+For this fork, the draft PR against `test-base/v2026.1012.0` runs
+**Fork GitHub App test image**. The workflow checks the exact PR commit, verifies
+that database files are unchanged, runs focused tests, and builds the release
+production Docker target on hosted Linux. It uploads an amd64 Docker archive,
+checksum, and source provenance for seven days. It does not publish to a registry.
+Download the artifact from the Actions run, check `SHA256SUMS`, then use
+`docker load -i paperclip-github-app.tar.gz`. Tag the loaded image as shown in
+the workflow summary and use it with your existing local configuration.
+The fork workflow and its test config are excluded from the upstream feature.
