@@ -112,7 +112,7 @@ export function createGitHubAppClient(fetcher: typeof fetch = fetch, clock = Dat
         if (!oldest) githubAppFailure();
         cache.delete(oldest[0]);
       }
-      const entry = { until: clock() + FRESH_MS, settled: false, promise: acquire(config, key) };
+      const entry = { until: clock() + FRESH_MS, settled: false, promise: acquire(config, key).catch(() => githubAppFailure()) };
       cache.set(cacheKey, entry);
       try {
         const result = await entry.promise;

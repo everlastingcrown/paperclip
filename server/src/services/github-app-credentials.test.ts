@@ -59,4 +59,12 @@ describe("GitHub App credential authorization", () => {
     });
     await expect(resolveGitHubAppCredential(db, connection, grant)).rejects.toThrow();
   });
+  it("cannot use a draft setup bypass after the connection is disabled", async () => {
+    const { connection, grant, db, rows } = fixture();
+    connection.status = "draft";
+    rows.connection.status = "disabled";
+    await expect(resolveGitHubAppCredential(db, connection, grant, true)).rejects.toThrow();
+    expect(mocks.secret).not.toHaveBeenCalled();
+  });
+
 });

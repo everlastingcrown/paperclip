@@ -117,4 +117,32 @@ describe("customer-owned GitHub App protocol", () => {
     await expect(client.acquire("scope", config, privateKey)).rejects.toThrow("GitHub App access is unavailable");
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+  it("redacts failures for every concurrent caller", async () => {
+    const fetcher = vi.fn(async () => { throw new Error("sensitive provider body"); });
+    const client = createGitHubAppClient(fetcher);
+    const results = await Promise.allSettled(Array.from({ length: 4 }, () => client.acquire("scope", config, privateKey)));
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") expect(result.reason.message).toBe("GitHub App access is unavailable. Check the App key, installation, selected repositories, and permissions.");
+    }
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates concurrent forced health checks", async () => {
+    const { client, fetcher } = fixture();
+    await Promise.all(Array.from({ length: 4 }, () => client.acquire("scope", config, privateKey, true)));
+    expect(fetcher).toHaveBeenCalledTimes(5);
+  });
+
+  it("paginates the scoped repository response to completion", async () => {
+    const repositories = Array.from({ length: 100 }, (_, index) => ({ id: index + 1, full_name: `owner/repo${index}` }));
+    const { client, fetcher } = fixture({
+      "/installation/repositories?per_page=100&page=1": { repositories },
+      "/installation/repositories?per_page=100&page=2": { repositories: [] },
+    });
+    const scope = parseGitHubAppConfig({ ...base, repositories: repositories.map(repo => repo.full_name).join(",") });
+    expect((await client.acquire("scope", scope, privateKey)).github.repositoryCount).toBe(100);
+    expect(fetcher).toHaveBeenCalledTimes(6);
+  });
+
 });
