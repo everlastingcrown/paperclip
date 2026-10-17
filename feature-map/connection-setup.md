@@ -4,6 +4,10 @@ People connect an app or account, choose who may use it, and recover incomplete
 setup from either Apps or a task that needs access. A saved draft, a completed
 provider login, a usable connection, and a resumed task are separate checkpoints.
 Chat channels additionally require an endpoint and linked sender identity.
+GitHub also offers a customer-owned App method for a dedicated agent's Git/gh
+credentials. Its App ID, vault-backed PEM, installation, selected repositories,
+and permission profile are verified at setup. It supplies no MCP tools. See
+[setup and qualification limits](../doc/connections/GITHUB-APP.md).
 
 ## Sub-features
 

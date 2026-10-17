@@ -5,6 +5,10 @@ compatibility method. Cloud owns the fixed public OAuth callback and signed
 webhook inbox; provider tokens are sealed to the enrolled instance and stored
 only in its existing encrypted secret system.
 
+Customer-owned Apps can also provide dedicated-agent Git and `gh` credentials
+without Paperclip Cloud enrollment. See [Customer-owned GitHub Apps](GITHUB-APP.md)
+for setup, permission profiles, token lifecycle, and current verification limits.
+
 ## Catalog entries
 
 **GitHub** connects an account for repository tools, Git, and `gh`, and opens

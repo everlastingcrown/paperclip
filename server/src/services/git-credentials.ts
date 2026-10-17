@@ -10,6 +10,7 @@ import {
   type Db,
 } from "@paperclipai/db";
 import { and, eq, inArray, or } from "drizzle-orm";
+import { isGitHubAppConnection, resolveGitHubAppCredential } from "./github-app-credentials.js";
 import { isGitHubDotCom } from "./github-fetch.js";
 import { secretService } from "./secrets.js";
 import { toolAccessService } from "./tool-access.js";
@@ -53,6 +54,8 @@ export type GitCredential = {
   identitySource?: "personal" | "dedicated";
   connectionId?: string;
   grantId?: string;
+  /** Installation credentials are renewed and authorized for each remote operation. */
+  refreshPerOperation?: boolean;
 };
 
 /** A prepared, credential-bearing git invocation: config args plus the env that carries the token. */
@@ -288,6 +291,7 @@ export function createGitRemoteAuthProvider(
     }
     credentialPromise ??= resolveCredential();
     const credential = await credentialPromise;
+    if (credential?.refreshPerOperation) credentialPromise = null;
     if (!credential) return null;
     return buildGitAuthInvocation(credential);
   };
@@ -306,6 +310,7 @@ export async function resolveManagedGitHubIdentitySelection(
   configured: boolean;
   identitySource?: "personal" | "dedicated";
   grant?: typeof connectionGrants.$inferSelect;
+  connection?: typeof toolConnections.$inferSelect;
   error?: string;
 }> {
   const connections = await db.select().from(toolConnections).where(and(
@@ -426,7 +431,7 @@ export async function resolveManagedGitHubIdentitySelection(
     return { configured: true, identitySource, error: "The managed GitHub connection is unavailable" };
   }
   if (grant.status !== "active") return { configured: true, identitySource, error: "The managed GitHub identity must be reconnected" };
-  return { configured: true, identitySource, grant };
+  return { configured: true, identitySource, grant, connection };
 }
 
 export async function filterResolvedGitHubConnectionsForRun<T extends {
@@ -486,6 +491,15 @@ export async function resolveManagedGitHubCredential(
         eq(companyMemberships.status, "active"),
       )).limit(1);
       if (!membership || membership.role === "viewer") return { configured: true, identitySource: selection.identitySource, error: "The managed GitHub identity owner is not an authorized company member" };
+    }
+    const appConnection = selection.connection;
+    if (appConnection && isGitHubAppConnection(appConnection)) {
+      const app = await resolveGitHubAppCredential(db, appConnection, grant);
+      return { configured: true, identitySource: "dedicated" as const, credential: {
+        token: app.token, source: "managed_connection" as const, secretName: null, refreshPerOperation: true,
+        githubIdentity: { userId: app.github.userId, login: app.github.login },
+        identitySource: "dedicated" as const, connectionId: grant.connectionId, grantId: grant.id,
+      } };
     }
     const expiresAt = grant.providerTenant?.oauth?.accessTokenExpiresAt;
     const refreshedAt = grant.providerTenant?.oauth?.refreshedAt;
@@ -565,6 +579,7 @@ export async function resolveManagedGitHubCredential(
   } catch {
     failure = { configured: true, identitySource: selection.identitySource, error: "GitHub credentials are temporarily unavailable" };
   }
+  if (selection.connection && isGitHubAppConnection(selection.connection)) return failure;
   // Retry credential acquisition, never the GitHub operation. An alternate
   // authorization must still belong to this exact principal and account.
   const alternate = await resolveManagedGitHubIdentitySelection(db, companyId, {

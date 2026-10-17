@@ -2196,6 +2196,23 @@
       ],
       "reviewedAt": "2026-09-30",
       "liveProof": "not-run"
+    },
+    {
+      "app": "github",
+      "method": "app-installation",
+      "auth": "api_key",
+      "policy": "provider-key",
+      "requestedScopes": [],
+      "capability": "write",
+      "supportedActions": "Managed shell Git, gh, and authorized server repository reads. No MCP tools. Selected repositories and read, author or reviewer permission profiles restrict every installation token.",
+      "evidence": [
+        "https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app",
+        "https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app"
+      ],
+      "reviewedAt": "2026-10-18",
+      "liveProof": "not-run",
+      "keyPermissions": "The App installation must grant the selected repositories and profile: contents, pull requests and issues read; author adds contents and pull requests write; reviewer adds pull requests write. No administration or workflow permission is requested.",
+      "evidenceLimit": "Provider protocol tests are fixtures. Public/private App registration, provider writes, renewal, rotation and revocation need account-bound live acceptance."
     }
   ]
 }

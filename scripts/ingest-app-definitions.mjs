@@ -285,6 +285,93 @@ const apps = [
           requiredResourceFilters: ["organization", "repository"],
         },
       ),
+{
+      "key": "app-installation",
+      "label": "Customer-owned GitHub App",
+      "purpose": "tool",
+      "transport": "rest_api",
+      "defaults": { "serverUrl": "https://api.github.com" },
+      "auth": "api_key",
+      "credentialExchange": "github_app_installation",
+      "ownershipModes": [
+            "customer"
+      ],
+      "grantKinds": [
+            "agent"
+      ],
+      "whenToUse": "Give one agent its own GitHub bot identity for Git and gh.",
+      "guidanceMd": "Register a public or private GitHub App and install it on the repositories this agent should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides Git and gh credentials; it does not provide MCP tools.",
+      "riskTier": "S3",
+      "tenantFields": [
+            {
+                  "key": "appId",
+          "placeholder": "123456",
+                  "label": "App ID",
+                  "type": "text",
+                  "required": true,
+                  "validation": {
+                        "pattern": "^[1-9]\\d*$"
+                  }
+            },
+            {
+                  "key": "installationId",
+          "placeholder": "12345678",
+                  "label": "Installation ID",
+                  "type": "text",
+                  "required": true,
+                  "validation": {
+                        "pattern": "^[1-9]\\d*$"
+                  }
+            },
+            {
+                  "key": "repositories",
+          "placeholder": "owner/repository",
+                  "label": "Selected repositories (owner/repository, separated by commas)",
+                  "type": "textarea",
+                  "required": true
+            },
+            {
+                  "key": "permissionProfile",
+          "placeholder": "read",
+                  "label": "Permissions",
+                  "type": "select",
+                  "required": true,
+                  "defaultValue": "read",
+                  "options": [
+                        {
+                              "value": "read",
+                              "label": "Read contents, pull requests and issues"
+                        },
+                        {
+                              "value": "author",
+                              "label": "Author: write contents and pull requests, read issues"
+                        },
+                        {
+                              "value": "reviewer",
+                              "label": "Reviewer: read contents and issues, write pull requests"
+                        }
+                  ]
+            }
+      ],
+      "credentialFields": [
+            {
+                  "key": "privateKey",
+          "placeholder": "-----BEGIN RSA PRIVATE KEY-----",
+                  "label": "App private key (PEM)",
+                  "type": "textarea",
+                  "secret": true,
+                  "required": true
+            }
+      ],
+      "warnings": [
+            "Shell Git and gh use the assigned bot identity regardless of who starts the task. Per-tool Ask-first controls do not restrict these credentials.",
+            "Existing tokens can remain usable until GitHub expires or revokes them. Use separate Apps for author and reviewer identities."
+      ],
+      "consoleLinks": {
+            "register": "https://github.com/settings/apps/new",
+            "docs": "https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation"
+      }
+},
       method(
         "mcp-key",
         "mcp_remote",
@@ -1787,6 +1874,7 @@ const validateApp = (app) => {
     if (
       connectionMethod.auth === "api_key" &&
       !connectionMethod.keyPlacement &&
+      !(app.slug === "github" && connectionMethod.credentialExchange === "github_app_installation" && connectionMethod.transport === "rest_api") &&
       (connectionMethod.purpose ?? "tool") !== "channel"
     )
       throw new Error(

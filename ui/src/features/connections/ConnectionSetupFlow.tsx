@@ -3805,6 +3805,10 @@ function KeyStep({
                 autoComplete="off"
                 value={values[field.configPath] ?? ""}
                 onChange={(e) => onChange({ ...values, [field.configPath]: e.target.value })}
+                onPaste={field.configPath === "credentials.privateKey" ? (event) => {
+                  event.preventDefault();
+                  onChange({ ...values, [field.configPath]: event.clipboardData.getData("text") });
+                } : undefined}
                 placeholder={field.type === "text" && field.secret === false ? field.placeholder : "••••••••••••••••"}
                 className="mt-2 h-11 font-mono"
               />
