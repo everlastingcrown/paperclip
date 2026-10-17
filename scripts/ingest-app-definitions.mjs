@@ -303,6 +303,7 @@ const apps = [
       "guidanceMd": "Register a public or private GitHub App and install it on the repositories this agent should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides Git and gh credentials; it does not provide MCP tools.",
       "riskTier": "S3",
       "tenantFields": [
+        { "key": "version", "label": "Credential version", "type": "text", "hidden": true, "defaultValue": "1", "validation": { "pattern": "^1$" } },
             {
                   "key": "appId",
           "placeholder": "123456",

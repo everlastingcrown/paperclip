@@ -382,8 +382,12 @@ export async function resolveManagedGitHubIdentitySelection(
         : "More than one managed GitHub identity matches this run",
     };
   }
+  const credentialPath = (grant: typeof connectionGrants.$inferSelect) => {
+    const connection = githubConnections.find(candidate => candidate.id === grant.connectionId);
+    return connection && isGitHubAppConnection(connection) ? "credentials.privateKey" : "oauth.access_token";
+  };
   const credentialIds = candidates.flatMap((grant) => grant.credentialSecretRefs
-    .filter((ref) => ref.configPath === "oauth.access_token").map((ref) => ref.secretId));
+    .filter((ref) => ref.configPath === credentialPath(grant)).map((ref) => ref.secretId));
   const credentialRecords = candidates.length > 1 && credentialIds.length > 0
     ? await db.select({
         id: companySecrets.id, status: companySecrets.status, deletedAt: companySecrets.deletedAt,
@@ -399,7 +403,7 @@ export async function resolveManagedGitHubIdentitySelection(
   const hasCredentialRecord = (grant: typeof connectionGrants.$inferSelect) => {
     if (candidates.length === 1) return true;
     const github = grant.providerTenant?.github;
-    const ref = grant.credentialSecretRefs.find((ref) => ref.configPath === "oauth.access_token");
+    const ref = grant.credentialSecretRefs.find((ref) => ref.configPath === credentialPath(grant));
     return Boolean(github && github.installationCount > 0 && github.repositoryCount > 0 && ref
       && credentialRecords.some((secret) => secret.id === ref.secretId
         && secret.status === "active" && !secret.deletedAt

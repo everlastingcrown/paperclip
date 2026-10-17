@@ -145,4 +145,9 @@ describe("customer-owned GitHub App protocol", () => {
     expect(fetcher).toHaveBeenCalledTimes(6);
   });
 
+  it("rejects unsupported persisted configuration versions", () => {
+    expect(() => parseGitHubAppConfig({ ...base, version: "2" })).toThrow();
+    expect(parseGitHubAppConfig({ ...base, version: "1" }).version).toBe(1);
+  });
+
 });

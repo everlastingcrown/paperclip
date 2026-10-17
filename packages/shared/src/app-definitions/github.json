@@ -66,6 +66,16 @@
       "riskTier": "S3",
       "tenantFields": [
         {
+          "key": "version",
+          "label": "Credential version",
+          "type": "text",
+          "hidden": true,
+          "defaultValue": "1",
+          "validation": {
+            "pattern": "^1$"
+          }
+        },
+        {
           "key": "appId",
           "placeholder": "123456",
           "label": "App ID",
