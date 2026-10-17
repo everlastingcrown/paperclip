@@ -115,8 +115,11 @@ For this fork, the draft PR against `test-base/v2026.1012.0` runs
 **Fork GitHub App test image**. The workflow checks the exact PR commit, verifies
 that database files are unchanged, runs focused tests, and builds the release
 production Docker target on hosted Linux. It uploads an amd64 Docker archive,
-checksum, and source provenance for seven days. It does not publish to a registry.
+checksum, resolved lockfile, and source provenance for seven days. It does not publish to a registry.
 Download the artifact from the Actions run, check `SHA256SUMS`, then use
 `docker load -i paperclip-github-app.tar.gz`. Tag the loaded image as shown in
 the workflow summary and use it with your existing local configuration.
+The release tag has a manifest/lockfile mismatch, so the workflow resolves the
+lockfile in its disposable build tree before frozen installation. It includes
+that exact resolved lockfile in the artifact; no lockfile change is committed.
 The fork workflow and its test config are excluded from the upstream feature.

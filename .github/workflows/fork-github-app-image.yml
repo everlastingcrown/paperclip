@@ -51,8 +51,11 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install pinned release dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Resolve the release tag's stale lockfile and install dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --resolution-only --ignore-scripts --no-frozen-lockfile
+          pnpm install --frozen-lockfile
 
       - name: Run focused provider, authorization, and catalog checks
         env:
@@ -93,8 +96,9 @@ jobs:
           printf 'source_commit=%s\nrelease_base=%s\nimage_tag=%s\nplatform=linux/amd64\n' \
             "$SOURCE_SHA" bba6a45f0d364cfd962ac59b3bdf2426a8222adb "$IMAGE_TAG" \
             > "$RUNNER_TEMP/github-app-image/provenance.txt"
+          cp pnpm-lock.yaml "$RUNNER_TEMP/github-app-image/pnpm-lock.yaml"
           cd "$RUNNER_TEMP/github-app-image"
-          sha256sum paperclip-github-app.tar.gz > SHA256SUMS
+          sha256sum paperclip-github-app.tar.gz pnpm-lock.yaml > SHA256SUMS
           {
             echo 'Download the artifact and load it locally:'
             echo '```sh'
