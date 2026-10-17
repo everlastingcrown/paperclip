@@ -20074,9 +20074,11 @@ export function toolAccessService(
       }
 
       if (
-        runContext.run.activeIdentityContextId &&
-        (connection.config.sourceTemplateKey === "github" ||
-          connection.transportConfig?.sourceTemplateKey === "github")
+        isGitHubAppConnection(connection) || (
+          runContext.run.activeIdentityContextId &&
+          (connection.config.sourceTemplateKey === "github" ||
+            connection.transportConfig?.sourceTemplateKey === "github")
+        )
       ) {
         await fail(
           409,
