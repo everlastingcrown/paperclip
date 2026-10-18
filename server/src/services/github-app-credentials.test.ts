@@ -10,6 +10,7 @@ vi.mock("./github-app-client.js", async importOriginal => ({
   createGitHubAppClient: () => ({ acquire: mocks.acquire }),
 }));
 import { resolveGitHubAppCredential } from "./github-app-credentials.js";
+import { githubAppFailure } from "./github-app-client.js";
 
 function fixture() {
   const connection = { id: "connection", companyId: "company", status: "active", enabled: true,
@@ -31,6 +32,14 @@ function fixture() {
 }
 
 describe("GitHub App credential authorization", () => {
+  it("preserves safe provider diagnostics through vault-backed acquisition", async () => {
+    const { connection, grant, db } = fixture();
+    mocks.acquire.mockImplementationOnce(async () => githubAppFailure("permissions"));
+    await expect(resolveGitHubAppCredential(db, connection, grant)).rejects.toMatchObject({
+      details: { code: "github_app_access_unavailable", reason: "permissions" },
+    });
+  });
+
   it("binds the private-key read and cache namespace to the exact selected grant", async () => {
     const { connection, grant, db } = fixture();
     expect(await resolveGitHubAppCredential(db, connection, grant)).toMatchObject({ token: "short-lived-token" });

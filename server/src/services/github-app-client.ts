@@ -1,6 +1,6 @@
 import { createHash, createPrivateKey, createSign } from "node:crypto";
 import type { ConnectionGrant } from "@paperclipai/shared";
-import { unprocessable } from "../errors.js";
+import { HttpError, unprocessable } from "../errors.js";
 
 export const GITHUB_APP_METHOD = "app-installation";
 export const GITHUB_APP_KEY_PATH = "credentials.privateKey";
@@ -19,18 +19,39 @@ const profiles = {
   author: { contents: "write", pull_requests: "write", issues: "read" },
   reviewer: { contents: "read", pull_requests: "write", issues: "read" },
 } as const;
-export function githubAppFailure(): never {
-  throw unprocessable("GitHub App access is unavailable. Check the App key, installation, selected repositories, and permissions.", { code: "github_app_access_unavailable" });
+const failureReasons = {
+  configuration: "Check the App ID or Client ID, numeric installation ID, repository names, and permission profile.",
+  private_key: "The private key could not be read as an RSA PEM. Paste the complete key with its header, footer, and line breaks.",
+  app_authentication: "GitHub could not authenticate the App. Check the App ID or Client ID, matching private key, and container clock.",
+  app_identity: "GitHub returned a different App identity. Check the App ID or Client ID.",
+  installation: "GitHub could not verify this installation for the App. Check the installation ID and that the installation is active.",
+  permissions: "The installation lacks required permissions. All profiles require Contents, Pull requests, and Issues read access; Author also requires Contents and Pull requests write, and Reviewer requires Pull requests write. Approve any updated permissions in GitHub installation settings.",
+  token: "GitHub could not issue a restricted installation token. Check that every selected repository belongs to this installation and the requested permissions are granted.",
+  bot_identity: "GitHub could not verify the App's bot account.",
+  repositories: "GitHub could not verify the selected repositories. Use owner/repository names and grant the installation access to each one.",
+  network: "The GitHub request failed. Check the container's network access to api.github.com and try again.",
+} as const;
+type FailureReason = keyof typeof failureReasons;
+export function githubAppFailure(reason?: FailureReason): never {
+  throw unprocessable(`GitHub App access is unavailable. ${reason ? failureReasons[reason] : "Check the App key, installation, selected repositories, and permissions."}`, {
+    code: "github_app_access_unavailable", ...(reason ? { reason } : {}),
+  });
+}
+/** Preserve only our closed diagnostic vocabulary, never a provider/crypto message. */
+export function rethrowGitHubAppFailure(error: unknown): never {
+  const reason = error instanceof HttpError ? (error.details as { reason?: unknown } | undefined)?.reason : undefined;
+  if (typeof reason === "string" && Object.hasOwn(failureReasons, reason)) githubAppFailure(reason as FailureReason);
+  githubAppFailure();
 }
 export function isGitHubAppConnection(connection: { config: Record<string, unknown> }) {
   return connection.config.sourceTemplateKey === "github" && connection.config.connectionMethodKey === GITHUB_APP_METHOD;
 }
 export function parseGitHubAppConfig(value: unknown): GitHubAppConfig {
   const v = value as Record<string, unknown> | null;
-  if (!v || (v.version !== undefined && v.version !== "1") || !/^[1-9]\d*$/.test(String(v.appId ?? "")) || !/^[1-9]\d*$/.test(String(v.installationId ?? ""))
-    || typeof v.repositories !== "string" || !Object.hasOwn(profiles, String(v.permissionProfile))) githubAppFailure();
+  if (!v || (v.version !== undefined && v.version !== "1") || !/^(?:[1-9]\d*|Iv[0-9][A-Za-z0-9.]{1,97})$/.test(String(v.appId ?? "")) || !/^[1-9]\d*$/.test(String(v.installationId ?? ""))
+    || typeof v.repositories !== "string" || !Object.hasOwn(profiles, String(v.permissionProfile))) githubAppFailure("configuration");
   const repositories = [...new Set(v.repositories.split(/[,\n]/).map(s => s.trim().toLowerCase()).filter(Boolean))].sort();
-  if (!repositories.length || repositories.length > 500 || repositories.some(r => !/^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+$/.test(r))) githubAppFailure();
+  if (!repositories.length || repositories.length > 500 || repositories.some(r => !/^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+$/.test(r))) githubAppFailure("configuration");
   return { version: 1, appId: String(v.appId), installationId: String(v.installationId), repositories,
     permissions: { ...profiles[v.permissionProfile as keyof typeof profiles] } };
 }
@@ -48,49 +69,52 @@ export type AppCredential = { token: string; expiresAt: number; github: NonNulla
 /** Fixed provider origin; never follow a redirect carrying an App JWT or token. */
 export function createGitHubAppClient(fetcher: typeof fetch = fetch, clock = Date.now) {
   const cache = new Map<string, { until: number; settled: boolean; promise: Promise<AppCredential> }>();
-  async function request(path: string, token: string, body?: unknown): Promise<any> {
-    const response = await fetcher(`https://api.github.com${path}`, {
+  async function request(path: string, token: string, reason: FailureReason, body?: unknown): Promise<any> {
+    let response: Response;
+    try { response = await fetcher(`https://api.github.com${path}`, {
       method: body ? "POST" : "GET", redirect: "error", signal: AbortSignal.timeout(15_000),
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
         ...(body ? { "Content-Type": "application/json" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    if (!response.ok) githubAppFailure();
-    return response.json();
+    }); } catch { githubAppFailure("network"); }
+    if (!response.ok) githubAppFailure(reason);
+    try { return await response.json(); } catch { githubAppFailure(reason); }
   }
   async function acquire(config: GitHubAppConfig, key: string): Promise<AppCredential> {
-    const jwt = githubAppJwt(config.appId, key, clock());
-    const app = await request("/app", jwt);
-    const installation = await request(`/app/installations/${config.installationId}`, jwt);
-    if (String(app.id) !== config.appId || typeof app.slug !== "string" || !/^[a-z0-9-]+$/.test(app.slug)
-      || String(installation.id) !== config.installationId || String(installation.app_id) !== config.appId
-      || installation.suspended_at || typeof installation.account?.login !== "string") githubAppFailure();
+    let jwt: string;
+    try { jwt = githubAppJwt(config.appId, key, clock()); } catch { githubAppFailure("private_key"); }
+    const app = await request("/app", jwt, "app_authentication");
+    const configuredAppId = config.appId.startsWith("Iv") ? app?.client_id : String(app?.id);
+    if (configuredAppId !== config.appId || !/^[1-9]\d*$/.test(String(app?.id)) || typeof app?.slug !== "string" || !/^[a-z0-9-]+$/.test(app.slug)) githubAppFailure("app_identity");
+    const installation = await request(`/app/installations/${config.installationId}`, jwt, "installation");
+    if (String(installation?.id) !== config.installationId || String(installation?.app_id) !== String(app.id)
+      || installation?.suspended_at || typeof installation?.account?.login !== "string") githubAppFailure("installation");
     const owner = installation.account.login.toLowerCase();
-    if (config.repositories.some(repo => repo.split("/")[0] !== owner)) githubAppFailure();
+    if (config.repositories.some(repo => repo.split("/")[0] !== owner)) githubAppFailure("repositories");
     for (const [name, level] of Object.entries(config.permissions)) {
       const allowed = installation.permissions?.[name];
-      if (allowed !== "write" && allowed !== level) githubAppFailure();
+      if (allowed !== "write" && allowed !== level) githubAppFailure("permissions");
     }
-    const minted = await request(`/app/installations/${config.installationId}/access_tokens`, jwt, {
+    const minted = await request(`/app/installations/${config.installationId}/access_tokens`, jwt, "token", {
       repositories: config.repositories.map(repo => repo.split("/")[1]), permissions: config.permissions,
     });
     const expiresAt = Date.parse(minted.expires_at);
-    if (typeof minted.token !== "string" || !minted.token.trim() || !Number.isFinite(expiresAt) || expiresAt <= clock() + 60_000) githubAppFailure();
+    if (typeof minted.token !== "string" || !minted.token.trim() || !Number.isFinite(expiresAt) || expiresAt <= clock() + 60_000) githubAppFailure("token");
     // Identity is the provider's bot account, never the installation owner.
-    const bot = await request(`/users/${encodeURIComponent(`${app.slug}[bot]`)}`, minted.token);
-    if (bot.login !== `${app.slug}[bot]` || bot.type !== "Bot" || !Number.isSafeInteger(bot.id) || bot.id < 1) githubAppFailure();
+    const bot = await request(`/users/${encodeURIComponent(`${app.slug}[bot]`)}`, minted.token, "bot_identity");
+    if (bot.login !== `${app.slug}[bot]` || bot.type !== "Bot" || !Number.isSafeInteger(bot.id) || bot.id < 1) githubAppFailure("bot_identity");
     const repositories: NonNullable<NonNullable<Metadata>["repositories"]> = [];
     for (let page = 1; page <= 6; page++) {
-      const data = await request(`/installation/repositories?per_page=100&page=${page}`, minted.token);
-      if (!Array.isArray(data.repositories)) githubAppFailure();
+      const data = await request(`/installation/repositories?per_page=100&page=${page}`, minted.token, "repositories");
+      if (!Array.isArray(data.repositories)) githubAppFailure("repositories");
       for (const repo of data.repositories) {
-        if (!Number.isSafeInteger(repo.id) || typeof repo.full_name !== "string" || !config.repositories.includes(repo.full_name.toLowerCase())) githubAppFailure();
+        if (!Number.isSafeInteger(repo.id) || typeof repo.full_name !== "string" || !config.repositories.includes(repo.full_name.toLowerCase())) githubAppFailure("repositories");
         repositories.push({ id: String(repo.id), fullName: repo.full_name, installationId: config.installationId, private: repo.private === true });
       }
       if (data.repositories.length < 100) break;
-      if (page === 6) githubAppFailure();
+      if (page === 6) githubAppFailure("repositories");
     }
-    if (new Set(repositories.map(r => r.fullName.toLowerCase())).size !== config.repositories.length) githubAppFailure();
+    if (new Set(repositories.map(r => r.fullName.toLowerCase())).size !== config.repositories.length) githubAppFailure("repositories");
     return { token: minted.token, expiresAt, github: {
       userId: String(bot.id), login: bot.login, appSlug: app.slug,
       installationCount: 1, repositoryCount: repositories.length, repositorySelection: "selected",
@@ -112,14 +136,14 @@ export function createGitHubAppClient(fetcher: typeof fetch = fetch, clock = Dat
         if (!oldest) githubAppFailure();
         cache.delete(oldest[0]);
       }
-      const entry = { until: clock() + FRESH_MS, settled: false, promise: acquire(config, key).catch(() => githubAppFailure()) };
+      const entry = { until: clock() + FRESH_MS, settled: false, promise: acquire(config, key).catch(rethrowGitHubAppFailure) };
       cache.set(cacheKey, entry);
       try {
         const result = await entry.promise;
         entry.until = Math.min(entry.until, result.expiresAt - 60_000);
         entry.settled = true;
         return result;
-      } catch { if (cache.get(cacheKey) === entry) cache.delete(cacheKey); githubAppFailure(); }
+      } catch (error) { if (cache.get(cacheKey) === entry) cache.delete(cacheKey); rethrowGitHubAppFailure(error); }
     },
   };
 }

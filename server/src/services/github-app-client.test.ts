@@ -49,6 +49,43 @@ describe("customer-owned GitHub App protocol", () => {
     expect(parseGitHubAppConfig({ ...base, repositories: "Owner/Repo,owner/repo\nowner/second" }).repositories).toEqual(["owner/repo", "owner/second"]);
   });
 
+  it.each(["Iv1.0123456789abcdef", "Iv23li0123456789abcd"])("accepts Client ID %s and verifies the returned numeric App identity", async appId => {
+    const { client } = fixture({ "/app": { id: 123, client_id: appId, slug: "test-app" } });
+    const scope = parseGitHubAppConfig({ ...base, appId });
+    const jwt = githubAppJwt(appId, privateKey, start);
+    expect(JSON.parse(Buffer.from(jwt.split(".")[1]!, "base64url").toString()).iss).toBe(appId);
+    expect((await client.acquire("scope", scope, privateKey)).github.login).toBe("test-app[bot]");
+  });
+
+  it("rejects a different Client ID returned by GitHub", async () => {
+    const { client, fetcher } = fixture({ "/app": { id: 123, client_id: "Iv1.other", slug: "test-app" } });
+    await expect(client.acquire("scope", parseGitHubAppConfig({ ...base, appId: "Iv1.expected" }), privateKey))
+      .rejects.toMatchObject({ details: { code: "github_app_access_unavailable", reason: "app_identity" } });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["/app", "app_authentication"],
+    ["/app/installations/456", "installation"],
+    ["/app/installations/456/access_tokens", "token"],
+    ["/users/test-app%5Bbot%5D", "bot_identity"],
+    ["/installation/repositories?per_page=100&page=1", "repositories"],
+  ])("returns a safe diagnostic when %s fails", async (path, reason) => {
+    const { client } = fixture({ [path]: null });
+    await expect(client.acquire("scope", config, privateKey)).rejects.toMatchObject({
+      details: { code: "github_app_access_unavailable", reason },
+    });
+    await expect(client.acquire("scope", config, privateKey)).rejects.not.toThrow("sensitive provider error");
+  });
+
+  it("identifies insufficient permissions before token issuance", async () => {
+    const { client, fetcher } = fixture({ "/app/installations/456": {
+      id: 456, app_id: 123, account: { login: "owner" }, permissions: { contents: "write", pull_requests: "write" },
+    } });
+    await expect(client.acquire("scope", config, privateKey)).rejects.toMatchObject({ details: { reason: "permissions" } });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("mints with explicit restrictions and returns the verified bot, not the installation owner", async () => {
     const { client, fetcher } = fixture();
     const result = await client.acquire("company:connection:grant:revision", config, privateKey);
@@ -123,7 +160,10 @@ describe("customer-owned GitHub App protocol", () => {
     const results = await Promise.allSettled(Array.from({ length: 4 }, () => client.acquire("scope", config, privateKey)));
     for (const result of results) {
       expect(result.status).toBe("rejected");
-      if (result.status === "rejected") expect(result.reason.message).toBe("GitHub App access is unavailable. Check the App key, installation, selected repositories, and permissions.");
+      if (result.status === "rejected") {
+        expect(result.reason.details.reason).toBe("network");
+        expect(result.reason.message).not.toContain("sensitive provider body");
+      }
     }
     expect(fetcher).toHaveBeenCalledTimes(1);
   });

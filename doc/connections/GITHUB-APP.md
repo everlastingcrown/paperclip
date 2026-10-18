@@ -17,7 +17,7 @@ tool executor. Existing managed OAuth and PAT methods remain available.
    installation settings URL).
 3. Open GitHub setup in Paperclip. Under the connection method choices, select
    **Customer-owned GitHub App**. Choose the agent that owns the bot identity.
-4. Enter the App ID, installation ID, and explicit `owner/repository` list.
+4. Enter the App ID or Client ID, installation ID, and explicit `owner/repository` list.
    Paste the complete PEM key, including its header, footer, and line breaks,
    into the masked private-key field. Choose a permission profile and connect.
 5. Paperclip verifies the App, installation, bot account, and repository access.
@@ -35,6 +35,14 @@ must contain 1–500 repositories. An empty list is denied. Paperclip sends expl
 repository and permission restrictions on every token request and never retries
 with broader access. GitHub also enforces the installation's current access.
 Administration and workflow permissions are not requested.
+
+GitHub accepts either the numeric App ID or the Client ID as the JWT issuer.
+Paperclip verifies the returned App identity and binds the installation to its
+numeric App ID in both cases. See [GitHub's JWT documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app).
+Connection failures identify the failed check using fixed guidance and a safe
+`reason` code. Provider response bodies, PEM contents, JWTs, and tokens are never
+included. A permissions failure requires approving the App's updated installation
+permissions; changing only its registration is insufficient.
 
 The verified `app-slug[bot]` identity appears on the connection. It acts for this
 agent regardless of the person who starts a task. A dedicated identity takes

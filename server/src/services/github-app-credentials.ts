@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { connectionGrants, toolConnections, toolConnectionInstalls, type Db } from "@paperclipai/db";
 import { resolveConnectionGrantSecret } from "./connection-credentials.js";
-import { createGitHubAppClient, GITHUB_APP_KEY_PATH, isGitHubAppConnection, parseGitHubAppConfig, githubAppFailure } from "./github-app-client.js";
+import { createGitHubAppClient, GITHUB_APP_KEY_PATH, isGitHubAppConnection, parseGitHubAppConfig, githubAppFailure, rethrowGitHubAppFailure } from "./github-app-client.js";
 
 export { isGitHubAppConnection, parseGitHubAppConfig } from "./github-app-client.js";
 type Connection = typeof toolConnections.$inferSelect;
@@ -30,7 +30,7 @@ export async function resolveGitHubAppCredential(db: Db, connection: Connection,
     const result = await client.acquire(`${c.companyId}:${c.id}:${g.id}:${secret.latestVersion}`, parseGitHubAppConfig(c.config.methodConfig), secret.value, force);
     await valid();
     return result;
-  } catch {
-    githubAppFailure();
+  } catch (error) {
+    rethrowGitHubAppFailure(error);
   }
 }

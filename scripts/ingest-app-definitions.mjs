@@ -328,11 +328,11 @@ const apps = [
             {
                   "key": "appId",
           "placeholder": "123456",
-                  "label": "App ID",
+                  "label": "App ID or Client ID",
                   "type": "text",
                   "required": true,
                   "validation": {
-                        "pattern": "^[1-9]\\d*$"
+                        "pattern": "^(?:[1-9][0-9]*|Iv[0-9][A-Za-z0-9.]{1,97})$"
                   }
             },
             {
@@ -342,7 +342,7 @@ const apps = [
                   "type": "text",
                   "required": true,
                   "validation": {
-                        "pattern": "^[1-9]\\d*$"
+                        "pattern": "^[1-9][0-9]*$"
                   }
             },
             {

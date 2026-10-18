@@ -1289,8 +1289,15 @@ function StandardConnectionSetupFlow({
   };
 
   const effectiveGrantKind = fixedGrantKind ?? grantKind;
+  const dedicatedAgentSelectionValid = effectiveGrantKind !== "agent" || installAgentIds.size === 1;
+  useEffect(() => {
+    if (effectiveGrantKind === "agent") setInstallChoice("specific");
+  }, [effectiveGrantKind]);
   const connectMutation = useMutation({
     mutationFn: async (entryOverride?: AppDefinition) => {
+      if (!dedicatedAgentSelectionValid) {
+        throw new Error("Choose exactly one agent to own this connection.");
+      }
       const connectEntry = entryOverride ?? entry;
       let result: ConnectToolAppResult;
       if (connectEntry) {
@@ -1968,7 +1975,7 @@ function StandardConnectionSetupFlow({
     <ConnectionAccessDefaults
       key="connection-defaults"
       extra={extra}
-      forceOpen={forceOpen}
+      forceOpen={forceOpen || !dedicatedAgentSelectionValid}
       companyId={selectedCompanyId}
       sentence={connectionDefaultSummarySentence({
         grantKind: effectiveGrantKind,
@@ -2414,7 +2421,7 @@ function StandardConnectionSetupFlow({
         </div>
       ) : step === "key" && entry && credentialStep !== undefined ? credentialStep : step === "key" && entry ? (
         <KeyStep
-          settingsValid={additionalSettingsValid && instructionsValid}
+          settingsValid={additionalSettingsValid && instructionsValid && dedicatedAgentSelectionValid}
           entry={entry}
           error={connectMutation.isError ? (connectMutation.error instanceof Error ? connectMutation.error.message : "Please check your key and try again.") : null}
           values={credentials}
@@ -4293,7 +4300,7 @@ export function AccessStepContent({
                 ]}
               />
             )}
-            {!preserveAgentAccess && !lockedAgentId && installChoice === "specific" ? (
+            {!preserveAgentAccess && !lockedAgentId && (grantKind === "agent" || installChoice === "specific") ? (
               <div className="mt-3">
                 <AgentMultiSelect
                   agents={agents}

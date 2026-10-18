@@ -377,6 +377,34 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     return root;
   }
 
+  it("requires an owner after switching to a customer-owned GitHub App", async () => {
+    mockSearch.value = "source=github";
+    listGalleryMock.mockResolvedValue({ apps: [customerOwnedApp(GITHUB)] });
+    await render();
+    await openAccessAdvanced();
+    await act(async () => radioContaining("Customer-owned GitHub App")!.click());
+    await flushReact();
+
+    expect(buttonContaining("Select agents")).toBeDefined();
+    await act(async () => {
+      setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
+      setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
+      setInputValue(container.querySelector<HTMLInputElement>('input[type="password"]')!, "fixture-pem");
+    });
+    expect(buttonByText("Connect")?.disabled).toBe(true);
+    expect(connectAppMock).not.toHaveBeenCalled();
+    await act(async () => buttonContaining("Select agents")!.click());
+    await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Allow Ada"]')!.click());
+    await act(async () => buttonByText("Connect")!.click());
+    await flushReact();
+    expect(connectAppMock).toHaveBeenCalledWith("company-1", expect.objectContaining({
+      connectionMethodKey: "app-installation",
+      grantKind: "agent",
+      subjectAgentId: "agent-1",
+    }));
+  });
+
   it("keeps Honcho setup blocked until the provider workspace is supplied", async () => {
     const honcho = CONNECTABLE_APP_DEFINITIONS.find((app) => app.slug === "honcho")!;
     experimentalMock.mockResolvedValue({ enableMemoryConnectors: true });
