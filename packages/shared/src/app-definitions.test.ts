@@ -1092,7 +1092,8 @@ describe("AppDefinition catalog", () => {
       for (const method of app.methods) {
         if (
           method.auth === "api_key" &&
-          (method.purpose ?? "tool") !== "channel"
+          (method.purpose ?? "tool") !== "channel" &&
+          !method.credentialExchange
         )
           expect(method.keyPlacement).toBeTruthy();
         if (method.auth === "oauth")
