@@ -64,6 +64,7 @@ jobs:
           set -euo pipefail
           pnpm exec vitest run --config .github/github-app-vitest.config.mts
           pnpm check:token-gates
+          pnpm --filter @paperclipai/plugin-sdk ensure-build-deps
           pnpm exec vitest run server/src/__tests__/connection-intents-service.test.ts server/src/__tests__/tool-access-service.test.ts --maxWorkers=1 -t 'only advertises GitHub|rolls back gallery app finish|reconnects a gallery app by rotating|reconnects a personal key'
           pnpm exec vitest run ui/src/pages/apps/AppsConnect.test.tsx --maxWorkers=1
 
