@@ -15,7 +15,7 @@ function fixture() {
   const connection = { id: "connection", companyId: "company", status: "active", enabled: true,
     config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation", methodConfig: {
       appId: "1", installationId: "2", repositories: "owner/repo", permissionProfile: "read",
-    } } } as typeof toolConnections.$inferSelect;
+    } } } as unknown as typeof toolConnections.$inferSelect;
   const grant = { id: "grant", companyId: "company", connectionId: "connection", kind: "agent", subjectAgentId: "agent", status: "active",
     credentialSecretRefs: [{ configPath: "credentials.privateKey", secretId: "secret" }] } as typeof connectionGrants.$inferSelect;
   const rows = { connection: structuredClone(connection), grant: structuredClone(grant), installs: [{ targetType: "agent", targetId: "agent" }] };
