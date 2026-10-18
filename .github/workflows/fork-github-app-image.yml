@@ -84,6 +84,9 @@ jobs:
           push: false
           tags: ${{ env.IMAGE_TAG }}
           outputs: type=docker,dest=${{ runner.temp }}/paperclip-github-app.tar
+          labels: |
+            org.opencontainers.image.source=https://github.com/everlastingcrown/paperclip
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
           build-args: |
             PAPERCLIP_BUILD_COMMIT=${{ env.SOURCE_SHA }}
             PAPERCLIP_BUILD_VERSION=2026.1012.0-github-app
@@ -208,3 +211,72 @@ jobs:
           name: github-app-image-smoke-${{ github.event.pull_request.head.sha }}
           path: evidence/
           retention-days: 7
+
+  publish:
+    name: Publish verified image to fork GHCR
+    needs: smoke
+    if: >-
+      github.repository == 'everlastingcrown/paperclip' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'backport/github-app-installation-auth-2026.1012.0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      REGISTRY_IMAGE: ghcr.io/everlastingcrown/paperclip
+    steps:
+      - name: Download the smoke-tested image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: paperclip-2026.1012.0-github-app-${{ github.event.pull_request.head.sha }}
+          path: image
+
+      - name: Verify the exact source and load the archive
+        working-directory: image
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          grep -Fx "source_commit=$SOURCE_SHA" provenance.txt
+          docker load -i paperclip-github-app.tar.gz
+
+      - name: Log in to this fork's container registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Publish a commit-specific image and record its digest
+        run: |
+          set -euo pipefail
+          source_tag="paperclip:2026.1012.0-github-app-$SOURCE_SHA"
+          registry_tag="$REGISTRY_IMAGE:2026.1012.0-github-app-$SOURCE_SHA"
+          docker tag "$source_tag" "$registry_tag"
+          docker push "$registry_tag"
+          digest=$(docker buildx imagetools inspect "$registry_tag" --format '{{.Manifest.Digest}}')
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          mkdir -p publication
+          printf 'source_commit=%s\nimage_tag=%s\nimage_digest=%s@%s\nplatform=linux/amd64\n' \
+            "$SOURCE_SHA" "$registry_tag" "$REGISTRY_IMAGE" "$digest" \
+            | tee publication/registry-reference.txt
+          {
+            echo 'Verified experimental image for Kubernetes:'
+            echo '```yaml'
+            printf 'image: %s@%s\n' "$REGISTRY_IMAGE" "$digest"
+            echo '```'
+            echo 'The package defaults to private. Private pulls need an imagePullSecret.'
+            echo 'This publication does not establish live GitHub App acceptance or database upgrade compatibility.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the registry reference
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: github-app-registry-reference-${{ github.event.pull_request.head.sha }}
+          path: publication/
+          retention-days: 30
