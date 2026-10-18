@@ -378,12 +378,8 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
   }
 
   it("requires an owner after switching to a customer-owned GitHub App", async () => {
-    mockSearch.value = "source=github";
-    listGalleryMock.mockResolvedValue({ apps: [{
-      ...GITHUB,
-      methods: GITHUB.methods.filter((method) => !method.oauthStrategy),
-      ownershipAvailability: { platform_shared: false, customer: true, dcr: true },
-    }] });
+    mockSearch.value = "source=github&method=mcp-key";
+    listGalleryMock.mockResolvedValue({ apps: [GITHUB_MANAGED] });
     await render();
     await openAccessAdvanced();
     await act(async () => radioContaining("Customer-owned GitHub App")!.click());
