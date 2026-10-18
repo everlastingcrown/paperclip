@@ -64,6 +64,8 @@ jobs:
           set -euo pipefail
           pnpm exec vitest run --config .github/github-app-vitest.config.mts
           pnpm check:token-gates
+          pnpm exec vitest run server/src/__tests__/connection-intents-service.test.ts server/src/__tests__/tool-access-service.test.ts --maxWorkers=1 -t 'only advertises GitHub|rolls back gallery app finish|reconnects a gallery app by rotating|reconnects a personal key'
+          pnpm exec vitest run ui/src/pages/apps/AppsConnect.test.tsx --maxWorkers=1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
@@ -117,3 +119,91 @@ jobs:
           compression-level: 0
           retention-days: 7
           if-no-files-found: error
+
+  smoke:
+    name: Disposable image boot and restart
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download the exact image and checksums
+        uses: actions/download-artifact@v8
+        with:
+          name: paperclip-2026.1012.0-github-app-${{ github.event.pull_request.head.sha }}
+          path: image
+
+      - name: Verify and load the image
+        working-directory: image
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          grep -Fx "source_commit=$EXPECTED_SHA" provenance.txt
+          docker load -i paperclip-github-app.tar.gz
+
+      - name: Boot a fresh embedded database and verify restart persistence
+        env:
+          IMAGE_TAG: paperclip:2026.1012.0-github-app-${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          # Synthetic key, used only by this disposable instance. No live App secrets.
+          export PAPERCLIP_SECRETS_MASTER_KEY
+          PAPERCLIP_SECRETS_MASTER_KEY=$(openssl rand -hex 32)
+          docker volume create github-app-smoke-data
+          docker run -d --name github-app-smoke --network none --memory 2g --cpus 2 \
+            --pids-limit 512 -v github-app-smoke-data:/paperclip \
+            -e HOST=127.0.0.1 -e PAPERCLIP_DEPLOYMENT_MODE=local_trusted \
+            -e PAPERCLIP_SECRETS_MASTER_KEY "$IMAGE_TAG"
+          wait_ready() {
+            for attempt in $(seq 1 90); do
+              if docker exec github-app-smoke node -e '
+                fetch("http://127.0.0.1:3100/api/health", {signal: AbortSignal.timeout(2000)})
+                  .then(async r => { if (!r.ok) process.exit(1); const h = await r.json();
+                    if (h.status !== "ok") process.exit(1); console.log(JSON.stringify(h)); })
+                  .catch(() => process.exit(1));
+              ' > evidence/health.json; then return 0; fi
+              test "$(docker inspect -f '{{.State.Running}}' github-app-smoke)" = true
+              sleep 2
+            done
+            return 1
+          }
+          wait_ready
+          docker exec github-app-smoke node -e '
+            const base = "http://127.0.0.1:3100";
+            const r = await fetch(base + "/api/companies", {method: "POST",
+              headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({name: "GitHub App image smoke"})});
+            if (r.status !== 201) throw new Error("Company creation status " + r.status);
+            const c = await r.json(); if (!c.id) throw new Error("Missing company ID");
+            console.log(JSON.stringify({id: c.id, name: c.name}));
+          ' > evidence/company.json
+          docker restart --time 30 github-app-smoke
+          wait_ready
+          docker exec github-app-smoke node -e '
+            const r = await fetch("http://127.0.0.1:3100/api/companies");
+            if (!r.ok) throw new Error("Company listing status " + r.status);
+            const rows = await r.json();
+            if (rows.length !== 1 || rows[0].name !== "GitHub App image smoke")
+              throw new Error("Company did not persist across restart");
+            const ui = await fetch("http://127.0.0.1:3100/");
+            if (!ui.ok || !(await ui.text()).includes("<html")) throw new Error("Missing UI HTML");
+            console.log("Fresh embedded database, company persistence, restart and UI HTML passed.");
+          ' | tee evidence/result.txt
+
+      - name: Collect logs and remove only the disposable instance
+        if: always()
+        run: |
+          mkdir -p evidence
+          docker logs github-app-smoke > evidence/container.log 2>&1 || true
+          docker rm -f github-app-smoke || true
+          docker volume rm github-app-smoke-data || true
+
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: github-app-image-smoke-${{ github.event.pull_request.head.sha }}
+          path: evidence/
+          retention-days: 7

@@ -382,6 +382,11 @@ describeEmbeddedPostgres("connectionIntentService", () => {
             label: "Personal access token (advanced)",
             auth: "api_key",
           }),
+          expect.objectContaining({
+            key: "app-installation",
+            label: "Customer-owned GitHub App",
+            auth: "api_key",
+          }),
         ],
       }),
     );
@@ -399,6 +404,11 @@ describeEmbeddedPostgres("connectionIntentService", () => {
       expect.objectContaining({
         key: "mcp-key",
         label: "Personal access token (advanced)",
+        auth: "api_key",
+      }),
+      expect.objectContaining({
+        key: "app-installation",
+        label: "Customer-owned GitHub App",
         auth: "api_key",
       }),
     ]);

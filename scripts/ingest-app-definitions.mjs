@@ -285,6 +285,27 @@ const apps = [
           requiredResourceFilters: ["organization", "repository"],
         },
       ),
+      method(
+        "mcp-key",
+        "mcp_remote",
+        "api_key",
+        { serverUrl: "https://api.githubcopilot.com/mcp/" },
+        "S3",
+        "Create a fine-grained token limited to the repositories agents should use.",
+        {
+          label: "Personal access token (advanced)",
+          purpose: "tool",
+          credentialFields: [
+            field("authorization", "GitHub token", "github_pat_..."),
+          ],
+          keyPlacement: {
+            location: "header",
+            name: "Authorization",
+            prefix: "Bearer ",
+          },
+          requiredResourceFilters: ["organization", "repository"],
+        },
+      ),
 {
       "key": "app-installation",
       "label": "Customer-owned GitHub App",
@@ -373,27 +394,6 @@ const apps = [
             "docs": "https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation"
       }
 },
-      method(
-        "mcp-key",
-        "mcp_remote",
-        "api_key",
-        { serverUrl: "https://api.githubcopilot.com/mcp/" },
-        "S3",
-        "Create a fine-grained token limited to the repositories agents should use.",
-        {
-          label: "Personal access token (advanced)",
-          purpose: "tool",
-          credentialFields: [
-            field("authorization", "GitHub token", "github_pat_..."),
-          ],
-          keyPlacement: {
-            location: "header",
-            name: "Authorization",
-            prefix: "Bearer ",
-          },
-          requiredResourceFilters: ["organization", "repository"],
-        },
-      ),
     ],
   ],
   [

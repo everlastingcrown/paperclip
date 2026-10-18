@@ -289,7 +289,7 @@ describe("AppDefinition catalog", () => {
   it("separates GitHub tools from the review bot without changing the provider identity", () => {
     const github = getConnectableAppDefinition("github")!;
     const bot = getConnectableAppDefinition("github-code-review-bot")!;
-    expect(github.methods.map((method) => method.key)).toEqual(["managed", "app-installation", "mcp-key"]);
+    expect(github.methods.map((method) => method.key)).toEqual(["managed", "mcp-key", "app-installation"]);
     expect(github.methods.every((method) => method.purpose === "tool")).toBe(true);
     const installation = github.methods.find(method => method.key === "app-installation")!;
     expect(installation).toMatchObject({ transport: "rest_api", auth: "api_key", credentialExchange: "github_app_installation", grantKinds: ["agent"] });

@@ -46,6 +46,42 @@
       ]
     },
     {
+      "key": "mcp-key",
+      "transport": "mcp_remote",
+      "auth": "api_key",
+      "ownershipModes": [
+        "customer"
+      ],
+      "whenToUse": "Use the provider-hosted connection for the quickest setup.",
+      "defaults": {
+        "serverUrl": "https://api.githubcopilot.com/mcp/"
+      },
+      "guidanceMd": "Create a fine-grained token limited to the repositories agents should use.",
+      "riskTier": "S3",
+      "label": "Personal access token (advanced)",
+      "purpose": "tool",
+      "credentialFields": [
+        {
+          "key": "authorization",
+          "label": "GitHub token",
+          "type": "password",
+          "required": true,
+          "placeholder": "github_pat_...",
+          "secret": true,
+          "helperMd": "Repository contents, issues, pull requests and other granted toolsets; selected repos and installation/PAT permissions apply. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
+        }
+      ],
+      "keyPlacement": {
+        "location": "header",
+        "name": "Authorization",
+        "prefix": "Bearer "
+      },
+      "requiredResourceFilters": [
+        "organization",
+        "repository"
+      ]
+    },
+    {
       "key": "app-installation",
       "label": "Customer-owned GitHub App",
       "purpose": "tool",
@@ -144,42 +180,6 @@
         "register": "https://github.com/settings/apps/new",
         "docs": "https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation"
       }
-    },
-    {
-      "key": "mcp-key",
-      "transport": "mcp_remote",
-      "auth": "api_key",
-      "ownershipModes": [
-        "customer"
-      ],
-      "whenToUse": "Use the provider-hosted connection for the quickest setup.",
-      "defaults": {
-        "serverUrl": "https://api.githubcopilot.com/mcp/"
-      },
-      "guidanceMd": "Create a fine-grained token limited to the repositories agents should use.",
-      "riskTier": "S3",
-      "label": "Personal access token (advanced)",
-      "purpose": "tool",
-      "credentialFields": [
-        {
-          "key": "authorization",
-          "label": "GitHub token",
-          "type": "password",
-          "required": true,
-          "placeholder": "github_pat_...",
-          "secret": true,
-          "helperMd": "Repository contents, issues, pull requests and other granted toolsets; selected repos and installation/PAT permissions apply. Create a key with read and write permissions for these actions; Paperclip cannot increase an existing key’s permissions."
-        }
-      ],
-      "keyPlacement": {
-        "location": "header",
-        "name": "Authorization",
-        "prefix": "Bearer "
-      },
-      "requiredResourceFilters": [
-        "organization",
-        "repository"
-      ]
     }
   ]
 }
