@@ -223,8 +223,10 @@ Project source repositories use the existing `project_workspaces` collection.
 Each selected GitHub repository has a canonical `repo_url` and stable provider ID
 in `metadata.githubRepositoryId`; the first workspace remains the execution default.
 The board can select multiple repositories from its usable personal and shared
-GitHub grants. Selection does not grant runtime credential access. Legacy workspace
-URLs remain valid. Project creation and repository replacement are transactional.
+GitHub grants, plus verified company-owned GitHub App repositories for active
+company members or the local trusted board. Selection does not grant runtime
+credential access. Legacy workspace URLs remain valid. Project creation and
+repository replacement are transactional.
 See `doc/project-repositories.md` for the API and UI contract.
 
 ## 7.6 `issues` (core task entity)

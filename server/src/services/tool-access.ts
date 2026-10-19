@@ -17688,10 +17688,10 @@ export function toolAccessService(
       return toApplication(row);
     },
 
-    // Repository discovery uses credential audiences, not connection-management
-    // visibility. An administrator cannot browse another user's private repos.
+    // Project configuration also exposes company-owned App repository metadata.
+    // Personal credentials still require the caller's own grant audience.
     listProjectRepositories: async (companyId: string, userId: string | null, localTrusted = false) =>
-      toolAccessService(db).listGitHubRepositories(companyId, userId, localTrusted),
+      toolAccessService(db).listGitHubRepositories(companyId, userId, localTrusted, { includeGitHubApps: true }),
 
     // Return identifiers, never credentials, so each attempted read can recheck its grant.
     githubReadConnectionIds: async (companyId: string, userId: string | null, localTrusted = false): Promise<string[]> => {
@@ -17735,6 +17735,7 @@ export function toolAccessService(
       companyId: string,
       userId: string | null,
       localTrusted = false,
+      options: { includeGitHubApps?: boolean } = {},
     ) => {
       const [connections, grants, members, memberships] = await Promise.all([
         db
@@ -17781,6 +17782,23 @@ export function toolAccessService(
           asRecord(connection.config).sourceTemplateKey !== "github"
         )
           continue;
+        if (isGitHubAppConnection(connection)) {
+          // These keys are company-owned dedicated identities. Share only the
+          // verified repository metadata with company members configuring a
+          // project, never credentials or authority to read repository files.
+          if (!options.includeGitHubApps || !(localTrusted || memberships.length > 0)) continue;
+          connectionCount += 1;
+          usableConnections.push({ id: connection.id, name: connection.name });
+          try {
+            const result = await refreshGitHubAppAccess(connection);
+            for (const repo of result.github.repositories ?? []) {
+              mergeProjectRepository(repositories, repo, connection.name, connection.id);
+            }
+          } catch {
+            failedConnectionCount += 1;
+          }
+          continue;
+        }
         const connectionGrants = grants.filter(
           (grant) => grant.connectionId === connection.id,
         );

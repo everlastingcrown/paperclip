@@ -56,7 +56,13 @@ precedence over personal credentials. Disabled, revoked, missing, and ambiguous
 assignments fail closed. Create **separate App registrations** for independent
 author and reviewer bot identities; two installations of one App share its bot.
 
-This identity is not proof of a human GitHub account. Personal repository pickers
+Company members (or the local trusted board) can select the App's verified,
+explicitly configured repositories when creating or configuring a project.
+The project picker refreshes App access and shows connection failures through
+its normal retry flow. Selecting a repository stores its identity and URL; it
+does not grant other agents the App identity or repository access.
+
+This identity is not proof of a human GitHub account. Personal repository reads
 and skill-source setup do not gain access to an agent's App credentials. Managed
 agent operations use the existing run identity and trust checks. Low-trust runs
 cannot export raw credentials. Shell Git and `gh` are not constrained by
