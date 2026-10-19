@@ -60,7 +60,7 @@ export function isGitHubAppConnection(connection: { config: Record<string, unkno
 }
 export function parseGitHubAppConfig(value: unknown): GitHubAppConfig {
   const v = value as Record<string, unknown> | null;
-  if (!v || (v.version !== undefined && v.version !== "1") || !/^(?:[1-9]\d*|Iv[0-9][A-Za-z0-9.]{1,97})$/.test(String(v.appId ?? "")) || !/^[1-9]\d*$/.test(String(v.installationId ?? ""))
+  if (!v || (v.version !== undefined && v.version !== "1" && v.version !== 1) || !/^(?:[1-9]\d*|Iv[0-9][A-Za-z0-9.]{1,97})$/.test(String(v.appId ?? "")) || !/^[1-9]\d*$/.test(String(v.installationId ?? ""))
     || typeof v.repositories !== "string" || !Object.hasOwn(profiles, String(v.permissionProfile))) githubAppFailure("configuration");
   const repositories = [...new Set(v.repositories.split(/[,\n]/).map(s => s.trim().toLowerCase()).filter(Boolean))].sort();
   if (!repositories.length || repositories.length > 500 || repositories.some(r => !/^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+$/.test(r))) githubAppFailure("configuration");

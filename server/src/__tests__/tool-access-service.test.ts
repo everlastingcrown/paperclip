@@ -15867,7 +15867,7 @@ describeEmbeddedPostgres("tool access service", () => {
     },
   );
 
-  it("replaces the dedicated GitHub App key only after verification and survives old-key revocation", async () => {
+  it.each([undefined, "1", 1])("persists GitHub App version %s and replaces its key only after verification, surviving old-key revocation", async (version) => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
     const service = createTestToolAccessService(db);
@@ -15904,9 +15904,11 @@ describeEmbeddedPostgres("tool access service", () => {
     });
     const connected = await service.connectGalleryApp(company.id, {
       galleryKey: "github", connectionMethodKey: "app-installation", grantKind: "agent", subjectAgentId: agent.id,
-      configValues: { version: "1", appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read" },
+      configValues: { ...(version === undefined ? {} : { version }), appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read" },
       credentialValues: { "credentials.privateKey": pem(keyA) },
     }, actor);
+    const stored = await service.getConnection(connected.connectionId, company.id);
+    expect(stored.config.methodConfig).toMatchObject({ version: "1", repositories: "owner/repo", permissionProfile: "read" });
     await service.finishGalleryAppConnection(company.id, connected.connectionId, {
       enabledCatalogEntryIds: [], askFirstCatalogEntryIds: [], access: { agentIds: [agent.id] },
     }, actor);
@@ -18665,6 +18667,16 @@ describe("projectedConnectionHeaders", () => {
 });
 
 describe("normalizeConnectionMethodConfig", () => {
+  const githubAppMethod = getConnectableAppDefinition("github")!.methods.find(method => method.key === "app-installation")!;
+  const appConfig = { appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read" };
+  it.each([undefined, "1", 1])("normalizes GitHub App version %s for persistence", version => {
+    expect(normalizeConnectionMethodConfig(githubAppMethod, { ...appConfig, ...(version === undefined ? {} : { version }) }).values)
+      .toEqual({ ...appConfig, version: "1" });
+  });
+  it.each(["2", 2, 0, true])("rejects unsupported GitHub App version %s before persistence", version => {
+    expect(() => normalizeConnectionMethodConfig(githubAppMethod, { ...appConfig, version })).toThrow();
+  });
+
   const posthog = getConnectableAppDefinition("posthog")!;
   const apiKeyMethod = posthog.methods.find(
     (method) => method.key === "mcp-api-key",

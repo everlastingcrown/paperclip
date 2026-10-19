@@ -56,6 +56,13 @@ describe("customer-owned GitHub App protocol", () => {
   it.each(["toString", "admin", "__proto__"])("rejects an unknown permission profile %s", permissionProfile => {
     expect(() => parseGitHubAppConfig({ ...base, permissionProfile })).toThrow();
   });
+  it.each([undefined, "1", 1])("accepts raw GitHub App version %s", version => {
+    expect(parseGitHubAppConfig({ ...base, ...(version === undefined ? {} : { version }) }).version).toBe(1);
+  });
+  it.each(["2", 2, 0, true, null])("rejects unsupported raw GitHub App version %s", version => {
+    expect(() => parseGitHubAppConfig({ ...base, version })).toThrow();
+  });
+
   it("normalizes repository scope without widening it", () => {
     expect(parseGitHubAppConfig({ ...base, repositories: "Owner/Repo,owner/repo\nowner/second" }).repositories).toEqual(["owner/repo", "owner/second"]);
   });

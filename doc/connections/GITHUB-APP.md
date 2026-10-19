@@ -59,6 +59,14 @@ agent operations use the existing run identity and trust checks. Low-trust runs
 cannot export raw credentials. Shell Git and `gh` are not constrained by
 per-tool Ask-first controls; the installation token's scope is their limit.
 
+## Configuration versions
+
+The setup/API `configValues` form accepts an omitted version, string `"1"`, or
+numeric `1`. Setup normalizes and stores the version as string `"1"`; unsupported
+versions are rejected. The credential parser separately produces a runtime
+configuration with numeric `version: 1`, a repository array, and resolved
+permissions. That runtime object is not a setup/API form payload.
+
 ## Renewal, rotation, and removal
 
 The PEM remains in Paperclip's encrypted company vault. It is bound to the exact

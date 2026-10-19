@@ -1099,7 +1099,9 @@ export function normalizeConnectionMethodConfig(
 
   const values: Record<string, string | boolean> = {};
   for (const field of fields) {
-    const raw = configValues?.[field.key] ?? field.defaultValue;
+    let raw = configValues?.[field.key] ?? field.defaultValue;
+    // API callers may use a numeric schema version; persist the catalog form representation.
+    if (method.credentialExchange === "github_app_installation" && field.key === "version" && raw === 1) raw = "1";
     if (field.type === "checkbox") {
       if (raw !== undefined && typeof raw !== "boolean")
         throw badRequest(`${field.label} must be true or false`);
