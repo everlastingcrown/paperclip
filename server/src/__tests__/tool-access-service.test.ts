@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, verify } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import {
@@ -72,6 +72,7 @@ import {
   projectConnectionMethodToolArguments,
   toolAccessService,
 } from "../services/tool-access.js";
+import { resolveGitHubAppCredential } from "../services/github-app-credentials.js";
 import { accessService } from "../services/access.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { toolAccessPolicyService } from "../services/tool-access-policy.js";
@@ -89,6 +90,17 @@ import { errorHandler } from "../middleware/index.js";
 import * as sentry from "../sentry.js";
 import type { VercelConnectClient } from "../services/vercel-connect.js";
 import { invalidatePaperclipCloudConnectorCapabilities, type PaperclipCloudConnector } from "../services/paperclip-cloud-connector.js";
+
+// The credential resolver creates its cached client at module load. Forward
+// requests to each test's fetch fixture rather than capturing the real network.
+vi.mock("../services/github-app-client.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../services/github-app-client.js")>();
+  return {
+    ...original,
+    createGitHubAppClient: (...args: Parameters<typeof original.createGitHubAppClient>) =>
+      original.createGitHubAppClient(args[0] ?? ((...request: Parameters<typeof fetch>) => globalThis.fetch(...request)), args[1]),
+  };
+});
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported
@@ -15796,6 +15808,98 @@ describeEmbeddedPostgres("tool access service", () => {
     expect(policiesAfter.map((policy) => policy.id).sort()).toEqual(
       policiesBefore.map((policy) => policy.id).sort(),
     );
+  });
+
+  it("replaces the dedicated GitHub App key only after verification and survives old-key revocation", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const service = createTestToolAccessService(db);
+    const actor = { actorType: "user" as const, actorId: "board" };
+    const keyA = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const keyB = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const pem = (key: typeof keyA) => key.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    let revokeA = false;
+    let rejectB = false;
+    const authenticatedKeys: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const path = String(url).replace("https://api.github.com", "");
+      if (path === "/app") {
+        const jwt = String((init?.headers as Record<string, string>).Authorization).replace("Bearer ", "");
+        const [header, payload, signature] = jwt.split(".");
+        const signed = Buffer.from(`${header}.${payload}`);
+        const key = verify("RSA-SHA256", signed, keyA.publicKey, Buffer.from(signature!, "base64url")) ? "A"
+          : verify("RSA-SHA256", signed, keyB.publicKey, Buffer.from(signature!, "base64url")) ? "B" : "unknown";
+        authenticatedKeys.push(key);
+        if ((key === "A" && revokeA) || (key === "B" && rejectB) || key === "unknown") {
+          return Response.json({ message: "sensitive provider failure" }, { status: 401 });
+        }
+      }
+      const bodies: Record<string, unknown> = {
+        "/app": { id: 123, slug: "test-app" },
+        "/app/installations/456": { id: 456, app_id: 123, account: { login: "owner" },
+          permissions: { contents: "read", pull_requests: "read", issues: "read" } },
+        "/app/installations/456/access_tokens": { token: "app-token", expires_at: new Date(Date.now() + 3_600_000).toISOString() },
+        "/users/test-app%5Bbot%5D": { id: 789, login: "test-app[bot]", type: "Bot" },
+        "/installation/repositories?per_page=100&page=1": { repositories: [{ id: 321, full_name: "owner/repo", private: true }] },
+      };
+      if (!bodies[path]) throw new Error(`Unexpected GitHub request: ${path}`);
+      return Response.json(bodies[path]);
+    });
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "github", connectionMethodKey: "app-installation", grantKind: "agent", subjectAgentId: agent.id,
+      configValues: { version: "1", appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read" },
+      credentialValues: { "credentials.privateKey": pem(keyA) },
+    }, actor);
+    await service.finishGalleryAppConnection(company.id, connected.connectionId, {
+      enabledCatalogEntryIds: [], askFirstCatalogEntryIds: [], access: { agentIds: [agent.id] },
+    }, actor);
+    await service.putConnectionInstalls(connected.connectionId, {
+      installs: [{ targetType: "agent", targetId: agent.id }],
+    }, actor);
+    const readGrant = async () => (await db.select().from(connectionGrants)
+      .where(eq(connectionGrants.connectionId, connected.connectionId)))[0]!;
+    const originalGrant = await readGrant();
+    const versions = () => db.select().from(companySecretVersions)
+      .where(eq(companySecretVersions.secretId, originalGrant.credentialSecretRefs[0]!.secretId));
+    const originalVersions = await versions();
+    const reconnect = (value: string) => service.reconnectGalleryApp(connected.connectionId, company.id,
+      { credentialValues: { "credentials.privateKey": value } }, actor);
+
+    // Neither malformed keys nor valid RSA keys rejected by GitHub rotate the vault.
+    await expect(reconnect("invalid PEM")).rejects.toMatchObject({ status: 422 });
+    rejectB = true;
+    await expect(reconnect(pem(keyB))).rejects.toMatchObject({ status: 422 });
+    expect(await readGrant()).toEqual(originalGrant);
+    expect(await versions()).toEqual(originalVersions);
+    const acquire = async () => {
+      const [connection] = await db.select().from(toolConnections).where(eq(toolConnections.id, connected.connectionId));
+      return resolveGitHubAppCredential(db, connection!, await readGrant(), false, true);
+    };
+    await expect(acquire()).resolves.toMatchObject({ token: "app-token" });
+    expect(authenticatedKeys.at(-1)).toBe("A");
+
+    // A is already revoked: reconnect must verify B without depending on A.
+    revokeA = true;
+    rejectB = false;
+    authenticatedKeys.length = 0;
+    await reconnect(pem(keyB));
+    expect(authenticatedKeys.length).toBeGreaterThan(0);
+    expect(authenticatedKeys.every(key => key === "B")).toBe(true);
+    const grant = await readGrant();
+    expect(grant.id).toBe(originalGrant.id);
+    expect(grant.subjectAgentId).toBe(agent.id);
+    expect(await versions()).toHaveLength(originalVersions.length + 1);
+    const connection = await service.getConnection(connected.connectionId, company.id);
+    expect(connection.credentialSecretRefs).toEqual([]);
+    expect(connection.credentialRefs).toEqual([]);
+    const bindings = await db.select().from(companySecretBindings)
+      .where(eq(companySecretBindings.targetId, connected.connectionId));
+    expect(bindings).toEqual([expect.objectContaining({
+      secretId: grant.credentialSecretRefs[0]!.secretId, configPath: "credentials.privateKey",
+    })]);
+    await expect(reconnect("invalid PEM")).rejects.toMatchObject({ status: 422 });
+    await expect(acquire()).resolves.toMatchObject({ token: "app-token" });
+    expect(authenticatedKeys.at(-1)).toBe("B");
   });
 
   it("reconnects a gallery app by rotating the existing credential in place (PAP-10859)", async () => {

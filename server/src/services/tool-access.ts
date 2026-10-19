@@ -15,6 +15,7 @@ import { COGNEE_STDIO_TEMPLATE, cogneeCloudUrl } from "./cognee-connection.js";
 import { isMemoryConnectorId, isRemoteMcpConnectorMethod, connectionPurposeTransportSchema } from "@paperclipai/shared";
 import { instanceSettingsService } from "./instance-settings.js";
 import { isGitHubAppConnection, parseGitHubAppConfig, resolveGitHubAppCredential } from "./github-app-credentials.js";
+import { createGitHubAppClient, GITHUB_APP_KEY_PATH } from "./github-app-client.js";
 import { githubBotRequest } from "./chat-github-client.js";
 import { syncConnectionCredentialBindings } from "./connection-credential-bindings.js";
 import {
@@ -14321,13 +14322,36 @@ export function toolAccessService(
     if (providedFields.length === 0)
       throw badRequest("Enter a replacement credential to reconnect this app");
 
+    // App keys belong to the dedicated agent grant. Verify the submitted key
+    // directly before rotating any vault version; checking health here would
+    // otherwise authenticate with the old key and could hide a bad replacement.
+    let appGrant: typeof connectionGrants.$inferSelect | undefined;
+    let appProviderTenant: (typeof connectionGrants.$inferSelect)["providerTenant"] = null;
+    if (isGitHubAppConnection(connection)) {
+      const grants = await db.select().from(connectionGrants).where(and(
+        eq(connectionGrants.companyId, companyId),
+        eq(connectionGrants.connectionId, connection.id),
+        eq(connectionGrants.status, "active"),
+      ));
+      if (grants.length !== 1 || grants[0]!.kind !== "agent" || !grants[0]!.subjectAgentId) {
+        throw unprocessable("Reconnect the dedicated GitHub App identity.");
+      }
+      appGrant = grants[0]!;
+      const key = input.credentialValues[GITHUB_APP_KEY_PATH]?.trim();
+      if (!key) throw badRequest("Enter a replacement GitHub App private key");
+      const verified = await createGitHubAppClient().acquire(
+        `${companyId}:${connection.id}:${appGrant.id}:replacement`,
+        parseGitHubAppConfig(connection.config.methodConfig), key, true,
+      );
+      appProviderTenant = { github: verified.github };
+    }
     const personalIdentity = await fixedPersonalIdentityForReconnect(
       connection,
       undefined,
       actor,
     );
     const credentialSecretRefs = [
-      ...(personalIdentity?.grant?.credentialSecretRefs ??
+      ...(appGrant?.credentialSecretRefs ?? personalIdentity?.grant?.credentialSecretRefs ??
         connection.credentialSecretRefs),
     ];
     const credentialRefs: McpConnectionCredentialRef[] = [
@@ -14335,6 +14359,20 @@ export function toolAccessService(
     ];
 
     const updated = await db.transaction(async (tx) => {
+      if (appGrant) {
+        const [currentConnection] = await tx.select().from(toolConnections).where(and(
+          eq(toolConnections.companyId, companyId), eq(toolConnections.id, connection.id),
+        )).for("update");
+        const [currentGrant] = await tx.select().from(connectionGrants).where(and(
+          eq(connectionGrants.companyId, companyId), eq(connectionGrants.id, appGrant.id),
+        )).for("update");
+        if (!currentConnection || !currentGrant
+          || currentConnection.updatedAt.getTime() !== connection.updatedAt.getTime()
+          || currentGrant.updatedAt.getTime() !== appGrant.updatedAt.getTime()
+          || currentGrant.status !== "active") {
+          throw conflict("The GitHub App identity changed during key verification. Please try again.");
+        }
+      }
       for (const field of providedFields) {
         const value = input.credentialValues[field.configPath]!.trim();
         if (field.placement === "url" && !remoteUrlCredentialMatchesPublicUrl(String(connection.config.url ?? ""), value)) {
@@ -14374,6 +14412,19 @@ export function toolAccessService(
       }
 
       const updatedAt = new Date();
+      if (appGrant) {
+        await tx.update(connectionGrants).set({
+          credentialSecretRefs, providerTenant: appProviderTenant, updatedAt,
+        }).where(and(eq(connectionGrants.companyId, companyId), eq(connectionGrants.id, appGrant.id)));
+        const binding = actorBinding(actor);
+        await tx.insert(toolAccessAuditEvents).values({
+          companyId, connectionId: connection.id,
+          actorType: binding.actorType ?? "system", actorId: binding.actorId,
+          action: "connection_grant.updated", outcome: "success",
+          reasonCode: "dedicated_identity_reconnected",
+          details: { kind: "agent", subjectAgentId: appGrant.subjectAgentId },
+        });
+      }
       if (personalIdentity) {
         const grantValues = {
           credentialSecretRefs,
@@ -14403,10 +14454,10 @@ export function toolAccessService(
       const [nextConnection] = await tx
         .update(toolConnections)
         .set({
-          credentialRefs,
+          credentialRefs: appGrant ? [] : credentialRefs,
           // Personal reconnect rotates the existing user's grant. The
           // connection-level organization slot stays exactly as it was.
-          credentialSecretRefs: personalIdentity
+          credentialSecretRefs: appGrant ? [] : personalIdentity
             ? connection.credentialSecretRefs
             : credentialSecretRefs,
           lastError: null,
@@ -14415,7 +14466,7 @@ export function toolAccessService(
         .where(eq(toolConnections.id, connection.id))
         .returning();
       await syncConnectionCredentialBindings(tx, nextConnection,
-        personalIdentity ? credentialSecretRefs : []);
+        personalIdentity || appGrant ? credentialSecretRefs : []);
       return nextConnection;
     });
     const health = await checkConnectionHealth(updated.id, actor);
