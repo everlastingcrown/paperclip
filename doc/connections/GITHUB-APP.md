@@ -102,9 +102,11 @@ installation-token authentication are outside this method.
 The requested release base is `v2026.1012.0`
 (`bba6a45f0d364cfd962ac59b3bdf2426a8222adb`). The feature uses existing JSON,
 grants, and vault references and changes no database schema, migrations,
-snapshots, journal, or migration runner. Use a separate release backport branch;
-do not run the newer upstream checkout against a release database merely to
-try this feature.
+snapshots, journal, or migration runner. Continue this fork's work on
+`backport/github-app-installation-auth-2026.1012.0`, the source of truth for
+[PR #1](https://github.com/everlastingcrown/paperclip/pull/1). The former
+`feat/github-app-installation-auth` branch is retired. Do not run a newer
+upstream checkout against a release database merely to try this feature.
 
 From the backport checkout, build with the release's own Dockerfile:
 
@@ -113,9 +115,9 @@ docker build --target production --progress=plain -t paperclip:2026.1012.0-githu
 ```
 
 Use your existing local deployment configuration with that image and a disposable
-copy of your release database and matching encryption key. Do not publish the
-image or treat the branch as upstream-ready until typecheck, tests, build,
-release database compatibility, and live acceptance pass. Run large checks and
+copy of your release database and matching encryption key. The fork image is
+published for testing. Do not treat the branch as upstream-ready until typecheck,
+tests, build, release database compatibility, and live acceptance pass. Run large checks and
 Docker builds one at a time on a machine with sufficient resources. A Docker
 Desktop installation must enable WSL integration for the build distro.
 
@@ -123,11 +125,21 @@ For this fork, the draft PR against `test-base/v2026.1012.0` runs
 **Fork GitHub App test image**. The workflow checks the exact PR commit, verifies
 that database files are unchanged, runs focused tests, and builds the release
 production Docker target on hosted Linux. It uploads an amd64 Docker archive,
-checksum, resolved lockfile, and source provenance for seven days. It does not publish to a registry.
-Download the artifact from the Actions run, check `SHA256SUMS`, then use
-`docker load -i paperclip-github-app.tar.gz`. Tag the loaded image as shown in
-the workflow summary and use it with your existing local configuration.
+checksum, resolved lockfile, and source provenance for seven days. A disposable
+boot/restart smoke test gates publication of the same archive to
+`ghcr.io/everlastingcrown/paperclip`. The workflow records the source commit,
+commit-specific tag, immutable digest, and platform in a registry-reference
+artifact retained for 30 days. Use its digest reference for Kubernetes testing.
+Alternatively, download the Docker archive, check `SHA256SUMS`, and run
+`docker load -i paperclip-github-app.tar.gz`.
+The build, smoke test, and publication passed for source `322a3cc63` in
+[run 39121344941](https://github.com/everlastingcrown/paperclip/actions/runs/39121344941).
+This is image startup evidence; live App authentication and release database
+upgrade/rollback remain unverified.
 The release tag has a manifest/lockfile mismatch, so the workflow resolves the
 lockfile in its disposable build tree before frozen installation. It includes
 that exact resolved lockfile in the artifact; no lockfile change is committed.
-The fork workflow and its test config are excluded from the upstream feature.
+The workflow and its test config are fork-specific. Any future upstream
+contribution must omit them and be rebased and verified separately. See the
+[consolidated handoff](../plans/2026-10-18-github-app-pause-handoff.md) for the
+comparison and verification history.
