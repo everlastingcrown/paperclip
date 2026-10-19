@@ -15867,6 +15867,58 @@ describeEmbeddedPostgres("tool access service", () => {
     },
   );
 
+  it.each(["managed", "mcp-key"])("creates a GitHub App after recovering an archived %s connection", async (previousMethod) => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const service = createTestToolAccessService(db, {
+      deploymentMode: "authenticated",
+      paperclipCloudConnector: fakeGitHubConnector(company.id, "board"),
+    });
+    const actor = { actorType: "user" as const, actorId: "board" };
+    await db.insert(companyMemberships).values({
+      companyId: company.id, principalType: "user", principalId: "board", membershipRole: "owner", status: "active",
+    });
+    const [application] = await db.insert(toolApplications).values({
+      companyId: company.id, name: "GitHub", type: "mcp_http", status: "archived",
+      metadata: { sourceTemplateKey: "github" },
+    }).returning();
+    const [previous] = await db.insert(toolConnections).values({
+      companyId: company.id, applicationId: application!.id, name: "GitHub", uid: `github-${randomUUID()}`, transport: "mcp_remote",
+      status: "archived", credentialPolicy: "shared",
+      config: { sourceTemplateKey: "github", connectionMethodKey: previousMethod, methodConfig: {} },
+    }).returning();
+    const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
+      .export({ type: "pkcs8", format: "pem" }).toString();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const path = String(url).replace("https://api.github.com", "");
+      const bodies: Record<string, unknown> = {
+        "/app": { id: 123, client_id: "Iv23testclient", slug: "test-app" },
+        "/app/installations/456": { id: 456, app_id: 123, account: { login: "owner" },
+          permissions: { contents: "read", pull_requests: "read", issues: "read" } },
+        "/app/installations/456/access_tokens": { token: "app-token", expires_at: new Date(Date.now() + 3_600_000).toISOString() },
+        "/users/test-app%5Bbot%5D": { id: 789, login: "test-app[bot]", type: "Bot" },
+        "/installation/repositories?per_page=100&page=1": { repositories: [{ id: 321, full_name: "owner/repo", private: true }] },
+      };
+      if (!bodies[path]) throw new Error(`Unexpected GitHub request: ${path}`);
+      return Response.json(bodies[path]);
+    });
+    const input = {
+      galleryKey: "github", connectionMethodKey: "app-installation", grantKind: "agent" as const, subjectAgentId: agent.id,
+      configValues: { version: "1", appId: "Iv23testclient", installationId: "456", repositories: "owner/repo", permissionProfile: "read" },
+      credentialValues: { "credentials.privateKey": privateKey },
+    };
+    const connected = await service.connectGalleryApp(company.id, input, actor);
+    expect(connected.connectionId).toBe(previous!.id);
+    expect(await service.getConnection(connected.connectionId, company.id)).toMatchObject({
+      transport: "rest_api", config: { connectionMethodKey: "app-installation", methodConfig: input.configValues },
+    });
+    // Once it is an App connection, recovery must still preserve its access policy.
+    await expect(service.connectGalleryApp(company.id, {
+      ...input, configValues: { ...input.configValues, repositories: "owner/other" },
+      resumeConnectionId: connected.connectionId,
+    }, actor)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("Reconnect preserves the App") });
+  });
+
   it.each([undefined, "1", 1])("persists GitHub App version %s and replaces its key only after verification, surviving old-key revocation", async (version) => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);

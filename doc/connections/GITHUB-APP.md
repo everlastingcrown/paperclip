@@ -50,6 +50,11 @@ catalog refreshes preserve `github_app_access_unavailable` and the allowlisted
 `reason` in response details and audit records. Configuration and authentication
 failures return HTTP 422; network failures return HTTP 502.
 
+Fresh setup can reuse an archived GitHub OAuth or PAT connection with the same
+name. Its old settings are not a GitHub App policy and must not be validated as
+one. Existing GitHub App connections still preserve their App, installation,
+repositories, and permission profile on resume or reconnect.
+
 The verified `app-slug[bot]` identity appears on the connection. It acts for this
 agent regardless of the person who starts a task. A dedicated identity takes
 precedence over personal credentials. Disabled, revoked, missing, and ambiguous

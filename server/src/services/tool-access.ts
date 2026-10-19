@@ -12617,7 +12617,10 @@ export function toolAccessService(
         : normalizeConnectionMethodConfig(method, input.configValues ?? asRecord(asRecord(retainedConnection?.config).methodConfig));
     if (galleryEntry?.slug === "github" && method?.key === "app-installation") {
       const parsed = parseGitHubAppConfig(normalizedMethodConfig?.values);
-      if (retainedConnection && JSON.stringify(parsed) !== JSON.stringify(parseGitHubAppConfig(asRecord(retainedConnection.config).methodConfig))) {
+      // Name-based recovery may retain an archived OAuth/PAT connection, whose
+      // settings are not an App policy. Only existing App connections pin it.
+      if (retainedConnection && isGitHubAppConnection(retainedConnection)
+        && JSON.stringify(parsed) !== JSON.stringify(parseGitHubAppConfig(asRecord(retainedConnection.config).methodConfig))) {
         throw badRequest("Reconnect preserves the App, installation and access policy. Create a new connection to change them.");
       }
     }
