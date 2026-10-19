@@ -42,7 +42,10 @@ numeric App ID in both cases. See [GitHub's JWT documentation](https://docs.gith
 Connection failures identify the failed check using fixed guidance and a safe
 `reason` code. Provider response bodies, PEM contents, JWTs, and tokens are never
 included. A permissions failure requires approving the App's updated installation
-permissions; changing only its registration is insufficient.
+permissions; changing only its registration is insufficient. Health checks and
+catalog refreshes preserve `github_app_access_unavailable` and the allowlisted
+`reason` in response details and audit records. Configuration and authentication
+failures return HTTP 422; network failures return HTTP 502.
 
 The verified `app-slug[bot]` identity appears on the connection. It acts for this
 agent regardless of the person who starts a task. A dedicated identity takes

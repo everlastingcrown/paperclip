@@ -32,16 +32,28 @@ const failureReasons = {
   network: "The GitHub request failed. Check the container's network access to api.github.com and try again.",
 } as const;
 type FailureReason = keyof typeof failureReasons;
+function githubAppDiagnostic(reason: unknown) {
+  const safeReason = typeof reason === "string" && Object.hasOwn(failureReasons, reason)
+    ? reason as FailureReason : undefined;
+  return {
+    code: "github_app_access_unavailable" as const,
+    ...(safeReason ? { reason: safeReason } : {}),
+    message: `GitHub App access is unavailable. ${safeReason ? failureReasons[safeReason] : "Check the App key, installation, selected repositories, and permissions."}`,
+  };
+}
 export function githubAppFailure(reason?: FailureReason): never {
-  throw unprocessable(`GitHub App access is unavailable. ${reason ? failureReasons[reason] : "Check the App key, installation, selected repositories, and permissions."}`, {
-    code: "github_app_access_unavailable", ...(reason ? { reason } : {}),
-  });
+  const { message, ...details } = githubAppDiagnostic(reason);
+  throw unprocessable(message, details);
+}
+/** Reconstruct safe guidance, never forward provider bodies or crypto messages. */
+export function sanitizeGitHubAppFailure(error: unknown) {
+  if (!(error instanceof HttpError)) return null;
+  const details = error.details as { code?: unknown; reason?: unknown } | undefined;
+  return details?.code === "github_app_access_unavailable" ? githubAppDiagnostic(details.reason) : null;
 }
 /** Preserve only our closed diagnostic vocabulary, never a provider/crypto message. */
 export function rethrowGitHubAppFailure(error: unknown): never {
-  const reason = error instanceof HttpError ? (error.details as { reason?: unknown } | undefined)?.reason : undefined;
-  if (typeof reason === "string" && Object.hasOwn(failureReasons, reason)) githubAppFailure(reason as FailureReason);
-  githubAppFailure();
+  githubAppFailure(sanitizeGitHubAppFailure(error)?.reason);
 }
 export function isGitHubAppConnection(connection: { config: Record<string, unknown> }) {
   return connection.config.sourceTemplateKey === "github" && connection.config.connectionMethodKey === GITHUB_APP_METHOD;

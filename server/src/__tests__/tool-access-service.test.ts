@@ -15810,6 +15810,63 @@ describeEmbeddedPostgres("tool access service", () => {
     );
   });
 
+  it.each(["private_key", "permissions", "installation", "network"] as const)(
+    "preserves GitHub App %s diagnostics through health/catalog endpoints and audit",
+    async (reason) => {
+      const company = await createCompany(db);
+      const agent = await createAgent(db, company.id);
+      const service = createTestToolAccessService(db);
+      const application = await service.createApplication(company.id, { name: "GitHub", type: "rest_api" });
+      const connection = await service.createConnection(company.id, {
+        applicationId: application.id, name: "GitHub App diagnostics", transport: "rest_api", status: "draft",
+        config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation", methodConfig: {
+          version: "1", appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read",
+        } },
+      });
+      const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
+        .export({ type: "pkcs8", format: "pem" }).toString();
+      const secret = await secretService(db).create(company.id, {
+        provider: "local_encrypted", name: "App PEM", key: `github.app.${randomUUID()}`,
+        value: reason === "private_key" ? "sensitive invalid crypto input" : privateKey,
+      });
+      await db.delete(connectionGrants).where(eq(connectionGrants.connectionId, connection.id));
+      await db.insert(connectionGrants).values({
+        companyId: company.id, connectionId: connection.id, kind: "agent", subjectAgentId: agent.id, status: "active",
+        credentialSecretRefs: [{ configPath: "credentials.privateKey", secretId: secret.id, versionSelector: "latest" }],
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+        if (reason === "network") throw new Error("sensitive network details");
+        const path = String(url).replace("https://api.github.com", "");
+        if (path === "/app") return Response.json({ id: 123, slug: "test-app" });
+        if (reason === "installation") return Response.json({ message: "sensitive provider body" }, { status: 403 });
+        return Response.json({ id: 456, app_id: 123, account: { login: "owner" }, permissions: {} });
+      });
+      const app = createRouteApp(db);
+      const guidance = {
+        private_key: "The private key could not be read as an RSA PEM.",
+        permissions: "The installation lacks required permissions.",
+        installation: "GitHub could not verify this installation for the App.",
+        network: "The GitHub request failed.",
+      }[reason];
+      for (const endpoint of ["health-check", "catalog/refresh"]) {
+        const response = await request(app).post(`/api/tool-connections/${connection.id}/${endpoint}`);
+        expect(response.status).toBe(reason === "network" ? 502 : 422);
+        expect(response.body).toMatchObject({
+          error: expect.stringContaining(guidance),
+          details: { code: "github_app_access_unavailable", reason },
+        });
+        expect(JSON.stringify(response.body)).not.toMatch(/sensitive|BEGIN PRIVATE KEY|DECODER/);
+      }
+      const audits = await db.select().from(toolAccessAuditEvents)
+        .where(eq(toolAccessAuditEvents.connectionId, connection.id));
+      for (const action of ["tool_connection.health_check", "tool_connection.catalog_refresh"]) {
+        expect(audits).toEqual(expect.arrayContaining([expect.objectContaining({
+          action, outcome: "failure", reasonCode: "github_app_access_unavailable", details: expect.objectContaining({ reason }),
+        })]));
+      }
+    },
+  );
+
   it("replaces the dedicated GitHub App key only after verification and survives old-key revocation", async () => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);

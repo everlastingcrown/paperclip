@@ -1,6 +1,8 @@
 import { generateKeyPairSync, verify } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { createGitHubAppClient, githubAppJwt, parseGitHubAppConfig } from "./github-app-client.js";
+import { createGitHubAppClient, githubAppJwt, parseGitHubAppConfig, sanitizeGitHubAppFailure } from "./github-app-client.js";
+
+import { unprocessable } from "../errors.js";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -31,6 +33,15 @@ function fixture(overrides: Record<string, unknown> = {}, expiresIn = 3_600_000)
 }
 
 describe("customer-owned GitHub App protocol", () => {
+  it.each(["permissions", "sensitive provider reason", "toString", undefined])("sanitizes App health diagnostics without trusting upstream text: %s", reason => {
+    const diagnostic = sanitizeGitHubAppFailure(unprocessable("sensitive provider body", {
+      code: "github_app_access_unavailable", reason, provider: "sensitive metadata",
+    }));
+    expect(diagnostic?.code).toBe("github_app_access_unavailable");
+    expect(diagnostic?.reason).toBe(reason === "permissions" ? "permissions" : undefined);
+    expect(JSON.stringify(diagnostic)).not.toMatch(/sensitive|provider/);
+  });
+
   it("signs an RSA JWT with clock-skew allowance and a ten-minute maximum lifetime", () => {
     const jwt = githubAppJwt("123", privateKey, start);
     const [header, payload, signature] = jwt.split(".");

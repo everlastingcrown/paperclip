@@ -15,7 +15,7 @@ import { COGNEE_STDIO_TEMPLATE, cogneeCloudUrl } from "./cognee-connection.js";
 import { isMemoryConnectorId, isRemoteMcpConnectorMethod, connectionPurposeTransportSchema } from "@paperclipai/shared";
 import { instanceSettingsService } from "./instance-settings.js";
 import { isGitHubAppConnection, parseGitHubAppConfig, resolveGitHubAppCredential } from "./github-app-credentials.js";
-import { createGitHubAppClient, GITHUB_APP_KEY_PATH } from "./github-app-client.js";
+import { createGitHubAppClient, GITHUB_APP_KEY_PATH, sanitizeGitHubAppFailure } from "./github-app-client.js";
 import { githubBotRequest } from "./chat-github-client.js";
 import { syncConnectionCredentialBindings } from "./connection-credential-bindings.js";
 import {
@@ -2865,7 +2865,9 @@ function isOAuthEndpointRejection(error: unknown): boolean {
 function healthFailureHttpStatus(failure: {
   status: ToolConnectionHealthStatus;
   code: string;
+  reason?: string;
 }): number {
+  if (failure.code === "github_app_access_unavailable") return failure.reason === "network" ? 502 : 422;
   if (failure.status === "missing_secret") return 422;
   if (failure.code === "oauth_challenge") return 422;
   if (failure.code === "oauth_refresh_missing") return 422;
@@ -2890,7 +2892,10 @@ function sanitizeHttpFailure(error: unknown): {
   status: ToolConnectionHealthStatus;
   message: string;
   code: string;
+  reason?: string;
 } {
+  const appFailure = sanitizeGitHubAppFailure(error);
+  if (appFailure) return { status: "error", ...appFailure };
   if (error instanceof HttpError) {
     const code = asRecord(error.details).code;
     if (code === "cognee_access_unverified" || code === "memory_api_key_rejected") {
@@ -7651,10 +7656,11 @@ export function toolAccessService(
         outcome: "failure",
         reasonCode: failure.code,
         actor,
-        details: { status: failure.status, transport: connection.transport },
+        details: { status: failure.status, transport: connection.transport, ...(failure.reason ? { reason: failure.reason } : {}) },
       });
       throw new HttpError(healthFailureHttpStatus(failure), failure.message, {
         code: failure.code,
+        ...(failure.reason ? { reason: failure.reason } : {}),
         connection: toConnection(updated),
         runtimeSlot,
         setupUrl: connectionSetupUrl(connection),
@@ -7703,11 +7709,12 @@ export function toolAccessService(
         action: "tool_connection.catalog_refresh",
         outcome: "failure",
         reasonCode: failure.code,
-        details: { status: failure.status },
+        details: { status: failure.status, ...(failure.reason ? { reason: failure.reason } : {}) },
         actor,
       });
       throw new HttpError(healthFailureHttpStatus(failure), failure.message, {
         code: failure.code,
+        ...(failure.reason ? { reason: failure.reason } : {}),
         setupUrl: connectionSetupUrl(connection),
         reconnectUrl: connectionReconnectUrl(connection),
       });
