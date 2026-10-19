@@ -15,8 +15,11 @@ tool executor. Existing managed OAuth and PAT methods remain available.
 2. Grant the App the permissions required by the profile below. Generate an RSA
    private key. Keep the App ID and installation ID (the number in the
    installation settings URL).
-3. Open GitHub setup in Paperclip. Under the connection method choices, select
-   **Customer-owned GitHub App**. Choose the agent that owns the bot identity.
+3. Open GitHub setup in Paperclip. If Paperclip enrollment or managed sign-in is
+   unavailable, select **Connect to GitHub App** directly. Otherwise, under the
+   connection method choices, select **Customer-owned GitHub App**. This method
+   requires neither Paperclip Cloud enrollment nor authorization of the official
+   Paperclip OAuth app. Choose the agent that owns the bot identity.
 4. Enter the App ID or Client ID, installation ID, and explicit `owner/repository` list.
    Paste the complete PEM key, including its header, footer, and line breaks,
    into the multiline private-key field. Choose a permission profile and connect.

@@ -390,7 +390,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
       setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
-      setInputValue(container.querySelector<HTMLInputElement>('input[type="password"]')!, "fixture-pem");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[autocomplete="off"]')!, "fixture-pem");
     });
     expect(buttonByText("Connect")?.disabled).toBe(true);
     expect(connectAppMock).not.toHaveBeenCalled();
@@ -1651,6 +1651,46 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
 
     expect(container.textContent).toContain("Connect with Paperclip");
     expect(container.textContent).not.toContain("GitHub token");
+  });
+
+  it.each([false, true])("connects a GitHub App without managed OAuth (instance enrolled: %s)", async (configured) => {
+    mockSearch.value = "source=github";
+    listGalleryMock.mockResolvedValue({
+      apps: [{
+        ...GITHUB,
+        methods: GITHUB.methods.filter((method) => !method.oauthStrategy),
+        ownershipAvailability: { platform_shared: false, customer: true, dcr: true },
+      }],
+    });
+    getCloudConnectorEnrollmentMock.mockResolvedValue({
+      configured,
+      status: configured ? "active" : "not_configured",
+    });
+    await render();
+    await act(async () => buttonByText("Connect to GitHub App")!.click());
+    await flushReact();
+
+    expect(container.textContent).not.toContain("Connect with Paperclip");
+    expect(container.textContent).not.toContain("GitHub sign-in is unavailable");
+    expect(buttonByText("Continue to GitHub")).toBeUndefined();
+    expect(buttonByText("Connect")?.disabled).toBe(true);
+    await act(async () => buttonContaining("Select agents")!.click());
+    await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Allow Ada"]')!.click());
+    await act(async () => {
+      setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
+      setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[autocomplete="off"]')!, "fixture-pem");
+    });
+    await act(async () => buttonByText("Connect")!.click());
+    await flushReact();
+    expect(connectAppMock).toHaveBeenCalledWith("company-1", expect.objectContaining({
+      connectionMethodKey: "app-installation",
+      grantKind: "agent",
+      subjectAgentId: "agent-1",
+    }));
+    expect(startCloudConnectorEnrollmentMock).not.toHaveBeenCalled();
+    expect(startOAuthMock).not.toHaveBeenCalled();
   });
 
   it("restores the setup step after the one-time enrollment callback", async () => {
