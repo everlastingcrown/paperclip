@@ -19,7 +19,7 @@ tool executor. Existing managed OAuth and PAT methods remain available.
    **Customer-owned GitHub App**. Choose the agent that owns the bot identity.
 4. Enter the App ID or Client ID, installation ID, and explicit `owner/repository` list.
    Paste the complete PEM key, including its header, footer, and line breaks,
-   into the masked private-key field. Choose a permission profile and connect.
+   into the multiline private-key field. Choose a permission profile and connect.
 5. Paperclip verifies the App, installation, bot account, and repository access.
    Finish setup for the selected agent. Failed verification leaves no working
    connection and cleans up the new credential using the normal setup rollback.

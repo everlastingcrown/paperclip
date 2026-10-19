@@ -1,3 +1,4 @@
+import { ConnectionCredentialInput } from "./ConnectionCredentialInput";
 import { StepHeader } from "./ConnectionSetupHeader";
 export { StepHeader } from "./ConnectionSetupHeader";
 import { ConnectionInstructionsEditor } from "./ConnectionInstructions";
@@ -3806,16 +3807,13 @@ function KeyStep({
               <label className="text-sm font-medium text-foreground">
                 {credentialFieldLabel(entry.name, field.label, fields.length)}
               </label>
-              <Input
+              <ConnectionCredentialInput
+                configPath={field.configPath}
                 type={field.type === "text" && field.secret === false ? "text" : "password"}
                 aria-label={credentialFieldLabel(entry.name, field.label, fields.length)}
                 autoComplete="off"
                 value={values[field.configPath] ?? ""}
-                onChange={(e) => onChange({ ...values, [field.configPath]: e.target.value })}
-                onPaste={field.configPath === "credentials.privateKey" ? (event) => {
-                  event.preventDefault();
-                  onChange({ ...values, [field.configPath]: event.clipboardData.getData("text") });
-                } : undefined}
+                onChange={(value) => onChange({ ...values, [field.configPath]: value })}
                 placeholder={field.type === "text" && field.secret === false ? field.placeholder : "••••••••••••••••"}
                 className="mt-2 h-11 font-mono"
               />
