@@ -1211,6 +1211,22 @@ function StandardConnectionSetupFlow({
       : "organization"
     : null;
   const fixedGrantKind = reconnectGrantKind ?? existingOAuthGrantKind;
+  const retainedGitHubApp = Boolean(identityConnection && connectionInstructionsConfig(identityConnection).sourceTemplateKey === "github"
+    && connectionInstructionsConfig(identityConnection).connectionMethodKey === "app-installation");
+  const retainedAgentGrants = useQuery({
+    queryKey: queryKeys.tools.connectionGrants(identityConnection?.id ?? "__none__"),
+    queryFn: () => toolsApi.listConnectionGrants(identityConnection!.id),
+    enabled: !!selectedCompanyId && retainedGitHubApp,
+  });
+  const retainedAgentId = retainedAgentGrants.data?.grants.find(
+    (grant) => grant.kind === "agent" && grant.subjectAgentId,
+  )?.subjectAgentId;
+  useEffect(() => {
+    if (retainedAgentId) {
+      setInstallAgentIds(new Set([retainedAgentId]));
+      setInstallChoice("specific");
+    }
+  }, [retainedAgentId]);
 
   useEffect(() => {
     if (fixedGrantKind) setGrantKind(fixedGrantKind);
@@ -1316,7 +1332,9 @@ function StandardConnectionSetupFlow({
   };
 
   const effectiveGrantKind = fixedGrantKind ?? grantKind;
-  const dedicatedAgentSelectionValid = effectiveGrantKind !== "agent" || installAgentIds.size === 1;
+  const dedicatedAgentSelectionValid = effectiveGrantKind !== "agent" || (
+    retainedGitHubApp ? Boolean(retainedAgentId) : installAgentIds.size === 1
+  );
   useEffect(() => {
     if (effectiveGrantKind === "agent") setInstallChoice("specific");
   }, [effectiveGrantKind]);
@@ -1337,7 +1355,8 @@ function StandardConnectionSetupFlow({
           ? parseGoogleSheetIds(googleSheetsLinks).ids
           : [];
         const trimmedGalleryName = galleryName.trim();
-        const connectionName = connectionNameForGrantKind(
+        const connectionName = trimmedGalleryName && trimmedGalleryName !== connectEntry.name
+          ? trimmedGalleryName : connectionNameForGrantKind(
           trimmedGalleryName || connectEntry.name,
           requestedGrantKind,
         );
@@ -1369,7 +1388,7 @@ function StandardConnectionSetupFlow({
             ? { resumeConnectionId: resumeConnectionId ?? customerClientResumeRef.current! }
             : reconnectConnectionId ? { reconnectConnectionId } : {}),
           ...(requestedGrantKind !== "organization" ? { grantKind: requestedGrantKind } : {}),
-          ...(requestedGrantKind === "agent" ? { subjectAgentId: [...installAgentIds][0] } : {}),
+          ...(requestedGrantKind === "agent" ? { subjectAgentId: retainedAgentId ?? [...installAgentIds][0] } : {}),
         });
         customerClientResumeRef.current = null;
       } else {
@@ -1403,7 +1422,7 @@ function StandardConnectionSetupFlow({
           name: connectionName,
           applicationId: prefill.applicationId,
           ...(effectiveGrantKind !== "organization" ? { grantKind: effectiveGrantKind } : {}),
-          ...(effectiveGrantKind === "agent" ? { subjectAgentId: [...installAgentIds][0] } : {}),
+          ...(effectiveGrantKind === "agent" ? { subjectAgentId: retainedAgentId ?? [...installAgentIds][0] } : {}),
         });
       }
       // A resumable draft already owns its identity and install reach. Replacing
@@ -1999,6 +2018,22 @@ function StandardConnectionSetupFlow({
   const renderConnectionDefaults = step === "key" ? (
     (extra?: ReactNode, forceOpen?: boolean) => (
     <>
+    <div className="mb-6">
+      <label className="text-sm font-medium text-foreground" htmlFor="connection-name">Connection name</label>
+      <Input
+        id="connection-name"
+        value={entry ? galleryName : linkName}
+        onChange={(event) => entry ? setGalleryName(event.target.value) : setLinkName(event.target.value)}
+        placeholder={entry?.name ?? defaultGenericMcpName(linkUrl) ?? "Custom app"}
+        maxLength={160}
+        disabled={connectMutation.isPending || oauthStartMutation.isPending}
+        className="mt-2 h-11"
+      />
+    </div>
+    {retainedAgentGrants.isError && <InlineBanner tone="danger">
+      Couldn’t load the assigned agent.
+      <Button type="button" variant="link" disabled={retainedAgentGrants.isFetching} onClick={() => void retainedAgentGrants.refetch()}>Try again</Button>
+    </InlineBanner>}
     <ConnectionAccessDefaults
       key="connection-defaults"
       extra={extra}
@@ -2036,7 +2071,7 @@ function StandardConnectionSetupFlow({
       githubIdentity={entry?.slug === "github"}
       identityLoading={Boolean(automaticOAuthEntry) && directOAuthLookupPending}
       preserveAgentAccess={Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection))}
-      disabled={connectMutation.isPending || oauthStartMutation.isPending}
+      disabled={connectMutation.isPending || oauthStartMutation.isPending || Boolean(retainedAgentId)}
     />
     {entry && instructionTemplate && instructionValue && <div className="mt-6"><ConnectionInstructionsEditor provider={entry.name} template={instructionTemplate} value={instructionValue} onChange={(value) => setInstructionDraft({ slug: entry.slug, value })} disabled={connectMutation.isPending || oauthStartMutation.isPending} /></div>}
     {additionalSettings && <div className="mt-6">{additionalSettings}</div>}
@@ -2488,6 +2523,10 @@ function StandardConnectionSetupFlow({
             setVercelConnector("");
             setConfigValues(defaultMethodConfig(nextMethod));
           }}
+          savedCredentialPaths={identityConnection && connectionMethodKey === connectionInstructionsConfig(identityConnection).connectionMethodKey
+            ? retainedAgentGrants.data?.grants.find((grant) => grant.subjectAgentId === retainedAgentId)?.credentialSecretRefs.map((ref) => ref.configPath)
+            : undefined}
+          fixedGitHubApp={retainedGitHubApp}
           configValues={configValues}
           onConfigChange={setConfigValues}
           googleSheetsLinks={googleSheetsLinks}
@@ -3440,6 +3479,8 @@ function KeyStep({
   methodKey,
   onMethodChange,
   configValues,
+  fixedGitHubApp = false,
+  savedCredentialPaths = [],
   onConfigChange,
   googleSheetsLinks,
   googleSheetsError,
@@ -3470,6 +3511,8 @@ function KeyStep({
   methodKey: string;
   onMethodChange: (method: ConnectionMethodDef | null) => void;
   configValues: Record<string, string | boolean>;
+  fixedGitHubApp?: boolean;
+  savedCredentialPaths?: string[];
   onConfigChange: (next: Record<string, string | boolean>) => void;
   googleSheetsLinks: string;
   googleSheetsError: string | null;
@@ -3543,7 +3586,7 @@ function KeyStep({
   const vercelReview = method?.credentialSources?.vercelConnect ?? null;
   const usingVercel = credentialSource === "vercel_connect";
   const allFilled = usingVercel || fields.every(
-    (f) => f.required === false || (values[f.configPath]?.trim().length ?? 0) > 0,
+    (f) => f.required === false || savedCredentialPaths.includes(f.configPath) || (values[f.configPath]?.trim().length ?? 0) > 0,
   );
   const acceptsCustomerOAuthClient = connectionMethodAcceptsCustomerOAuthClient(method);
   const customerOAuthClientRequired = acceptsCustomerOAuthClient
@@ -3644,9 +3687,9 @@ function KeyStep({
       {!method && <p className="mt-2 text-xs text-muted-foreground">Choose a connection method to continue.</p>}
     </div>
   ) : null;
-  const hasAdvancedSettings = advancedConfigFields.length > 0
+  const hasAdvancedSettings = !fixedGitHubApp && (advancedConfigFields.length > 0
     || optionalCustomerOAuthClient
-    || hasAlternateMethods;
+    || hasAlternateMethods);
   // Keep the disclosure open when what is inside it is load-bearing right now:
   // a non-default method in use, or a selection the connector still needs.
   const forceAdvancedOpen = usingCustomOAuth || !hasMethodSelection;
@@ -3806,15 +3849,18 @@ function KeyStep({
 
         {error ? <div role="alert"><InlineBanner tone="danger">{error}</InlineBanner></div> : null}
 
-        {standardConfigFields.map((field) => (
-          <MethodConfigField
-            key={field.key}
-            field={field}
-            value={configValues[field.key]}
-            onChange={(value) => onConfigChange({ ...configValues, [field.key]: value })}
-          />
-        ))}
-
+        {savedCredentialPaths.length > 0 ? <p className="text-sm text-muted-foreground">Leave the key blank to keep the saved credential, or paste a replacement.</p> : null}
+        {fixedGitHubApp ? <p className="text-sm text-muted-foreground">Reconnect keeps this App, installation, repositories, permission profile and assigned agent. Create a new connection to change them.</p> : null}
+        <fieldset disabled={fixedGitHubApp} className="space-y-6">
+          {standardConfigFields.map((field) => (
+            <MethodConfigField
+              key={field.key}
+              field={field}
+              value={configValues[field.key]}
+              onChange={(value) => onConfigChange({ ...configValues, [field.key]: value })}
+            />
+          ))}
+        </fieldset>
 
         {!usingVercel && method?.auth === "oauth" && customerOAuthClientRequired ? (
           <div id={customOAuthFieldsId} role="region" aria-label="Your OAuth app">

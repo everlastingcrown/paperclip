@@ -15867,7 +15867,8 @@ describeEmbeddedPostgres("tool access service", () => {
     },
   );
 
-  it.each(["managed", "mcp-key"])("creates a GitHub App after recovering an archived %s connection", async (previousMethod) => {
+  it.each(["managed", "mcp-key", "app-installation", "app-installation-explicit-app"])("creates a GitHub App after recovering an archived %s connection", async (scenario) => {
+    const previousMethod = scenario === "app-installation-explicit-app" ? "app-installation" : scenario;
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
     const service = createTestToolAccessService(db, {
@@ -15885,7 +15886,8 @@ describeEmbeddedPostgres("tool access service", () => {
     const [previous] = await db.insert(toolConnections).values({
       companyId: company.id, applicationId: application!.id, name: "GitHub", uid: `github-${randomUUID()}`, transport: "mcp_remote",
       status: "archived", credentialPolicy: "shared",
-      config: { sourceTemplateKey: "github", connectionMethodKey: previousMethod, methodConfig: {} },
+      config: { sourceTemplateKey: "github", connectionMethodKey: previousMethod, methodConfig: previousMethod === "app-installation"
+        ? { version: "1", appId: "999", installationId: "888", repositories: "old/repo", permissionProfile: "author" } : {} },
     }).returning();
     const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
       .export({ type: "pkcs8", format: "pem" }).toString();
@@ -15907,16 +15909,48 @@ describeEmbeddedPostgres("tool access service", () => {
       configValues: { version: "1", appId: "Iv23testclient", installationId: "456", repositories: "owner/repo", permissionProfile: "read" },
       credentialValues: { "credentials.privateKey": privateKey },
     };
-    const connected = await service.connectGalleryApp(company.id, input, actor);
-    expect(connected.connectionId).toBe(previous!.id);
+    const connected = await service.connectGalleryApp(company.id, {
+      ...input, ...(scenario === "app-installation-explicit-app" ? { applicationId: application!.id } : {}),
+    }, actor);
+    if (previousMethod === "app-installation") {
+      expect(connected.connectionId).not.toBe(previous!.id);
+      expect(await service.getConnection(previous!.id, company.id)).toMatchObject({ status: "archived" });
+    } else {
+      expect(connected.connectionId).toBe(previous!.id);
+    }
     expect(await service.getConnection(connected.connectionId, company.id)).toMatchObject({
       transport: "rest_api", config: { connectionMethodKey: "app-installation", methodConfig: input.configValues },
     });
+    const renamed = await service.connectGalleryApp(company.id, {
+      ...input, credentialValues: {}, name: "Review bot", resumeConnectionId: connected.connectionId,
+    }, actor);
+    expect(renamed.connectionId).toBe(connected.connectionId);
+    expect(await service.getConnection(renamed.connectionId, company.id)).toMatchObject({ name: "Review bot" });
     // Once it is an App connection, recovery must still preserve its access policy.
     await expect(service.connectGalleryApp(company.id, {
       ...input, configValues: { ...input.configValues, repositories: "owner/other" },
       resumeConnectionId: connected.connectionId,
     }, actor)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("Reconnect preserves the App") });
+    if (scenario === "app-installation") {
+      await service.finishGalleryAppConnection(company.id, connected.connectionId, {
+        enabledCatalogEntryIds: [], askFirstCatalogEntryIds: [], access: { agentIds: [agent.id] },
+      }, actor);
+      await service.archiveConnection(connected.connectionId, company.id, actor);
+      const newOwner = await createAgent(db, company.id);
+      const addedAgain = await service.connectGalleryApp(company.id, {
+        ...input, subjectAgentId: newOwner.id, configValues: { ...input.configValues, appId: "123" },
+      }, actor);
+      expect(addedAgain.connectionId).not.toBe(connected.connectionId);
+      const [grant] = await db.select().from(connectionGrants).where(eq(connectionGrants.connectionId, addedAgain.connectionId));
+      expect(grant).toMatchObject({ subjectAgentId: newOwner.id, status: "active" });
+      await service.archiveConnection(addedAgain.connectionId, company.id, actor);
+      mockToolsList([]);
+      const pat = await withGalleryServerUrl("github", PUBLIC_MCP_FIXTURE_URL, () => service.connectGalleryApp(company.id, {
+        galleryKey: "github", connectionMethodKey: "mcp-key", credentialValues: { "credentials.authorization": "new-pat" },
+      }, actor));
+      expect(pat.connectionId).not.toBe(addedAgain.connectionId);
+      expect(pat.connection.config.connectionMethodKey).toBe("mcp-key");
+    }
   });
 
   it.each([undefined, "1", 1])("persists GitHub App version %s and replaces its key only after verification, surviving old-key revocation", async (version) => {

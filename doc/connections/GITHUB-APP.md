@@ -168,3 +168,18 @@ The workflow and its test config are fork-specific. Any future upstream
 contribution must omit them and be rebased and verified separately. See the
 [consolidated handoff](../plans/2026-10-18-github-app-pause-handoff.md) for the
 comparison and verification history.
+
+### Connection names and removal
+
+The shared Connectors and Projects setup form includes **Connection name**.
+Choose a name to distinguish bot identities, and edit it when reconnecting.
+Reconnect restores the assigned agent, keeps the App, installation and access
+policy fixed, and lets you keep the saved key by leaving its field blank.
+
+After **Remove**, adding a connection starts a fresh GitHub App identity even
+when the default name matches an archived connection. Its App, installation,
+repositories, permission profile and assigned agent can all be chosen again.
+The archived connection and its revoked grants remain separate history; they
+are not silently revived with new credentials. Switching from a removed App to
+a token connection is also supported. Explicit reconnect/resume links continue
+the original connection and preserve its authority boundaries.

@@ -24,6 +24,7 @@ vi.mock("@/api/instanceSettings", () => ({ instanceSettingsApi: {
 } }));
 const listApplicationsMock = vi.hoisted(() => vi.fn());
 const listConnectionsMock = vi.hoisted(() => vi.fn());
+const listConnectionGrantsMock = vi.hoisted(() => vi.fn());
 const getConnectionMock = vi.hoisted(() => vi.fn());
 const getConnectionInstallsMock = vi.hoisted(() => vi.fn());
 const connectAppMock = vi.hoisted(() => vi.fn());
@@ -78,6 +79,7 @@ vi.mock("@/api/tools", () => ({
     listGallery: (companyId: string) => listGalleryMock(companyId),
     listApplications: (companyId: string) => listApplicationsMock(companyId),
     listConnections: (companyId: string) => listConnectionsMock(companyId),
+    listConnectionGrants: (id: string) => listConnectionGrantsMock(id),
     getConnection: (id: string) => getConnectionMock(id),
     getConnectionInstalls: (id: string) => getConnectionInstallsMock(id),
     connectApp: (companyId: string, input: unknown) => connectAppMock(companyId, input),
@@ -312,6 +314,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     });
     listApplicationsMock.mockResolvedValue({ applications: [] });
     listConnectionsMock.mockResolvedValue({ connections: [] });
+    listConnectionGrantsMock.mockResolvedValue({ grants: [] });
     getConnectionInstallsMock.mockResolvedValue({ installs: [{ targetType: "company", targetId: "company-1" }] });
     startOAuthMock.mockResolvedValue({
       connectionId: "conn-notion",
@@ -387,6 +390,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
 
     expect(buttonContaining("Select agents")).toBeDefined();
     await act(async () => {
+      setInputValue(container.querySelector<HTMLInputElement>('#connection-name')!, "Author bot");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
       setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
@@ -400,8 +404,40 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     await flushReact();
     expect(connectAppMock).toHaveBeenCalledWith("company-1", expect.objectContaining({
       connectionMethodKey: "app-installation",
+      name: "Author bot",
       grantKind: "agent",
       subjectAgentId: "agent-1",
+    }));
+  });
+
+  it.each(["page", "dialog"] as const)("restores and renames a GitHub App on %s reconnect without requiring a new key", async (host) => {
+    const connectionId = "22222222-2222-4222-8222-222222222222";
+    mockSearch.value = `source=github&reconnect=${connectionId}`;
+    listGalleryMock.mockResolvedValue({ apps: [GITHUB_MANAGED] });
+    listApplicationsMock.mockResolvedValue({ applications: [{ id: "app-github", metadata: { sourceTemplateKey: "github" } }] });
+    const configValues = { version: "1", appId: "123456", installationId: "12345678", repositories: "example/repository", permissionProfile: "read" };
+    listConnectionsMock.mockResolvedValue({ connections: [{
+      id: connectionId, applicationId: "app-github", name: "Old bot", status: "active", credentialPolicy: "per_agent", authKind: "api_key",
+      config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation", methodConfig: configValues }, transportConfig: {},
+    }] });
+    listConnectionGrantsMock.mockResolvedValue({ grants: [{ kind: "agent", subjectAgentId: "agent-1", credentialSecretRefs: [{ configPath: "credentials.privateKey" }] }] });
+    if (host === "page") listConnectionGrantsMock.mockRejectedValueOnce(new Error("temporary failure"));
+    await render(undefined, false, <ConnectionSetupFlow host={host} serviceSlug="github" />);
+    await flushReact();
+    if (host === "page") {
+      expect(buttonByText("Connect")?.disabled).toBe(true);
+      expect(container.textContent).toContain("Couldn’t load the assigned agent");
+      await act(async () => buttonByText("Try again")!.click());
+      await flushReact();
+    }
+    expect(container.querySelector<HTMLInputElement>('#connection-name')?.value).toBe("Old bot");
+    expect(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')?.matches(":disabled")).toBe(true);
+    expect(buttonByText("Connect")?.disabled).toBe(false);
+    await act(async () => setInputValue(container.querySelector<HTMLInputElement>('#connection-name')!, "Review bot"));
+    await act(async () => buttonByText("Connect")!.click());
+    await flushReact();
+    expect(connectAppMock).toHaveBeenCalledWith("company-1", expect.objectContaining({
+      name: "Review bot", reconnectConnectionId: connectionId, subjectAgentId: "agent-1", configValues, credentialValues: {},
     }));
   });
 
@@ -1653,7 +1689,9 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     expect(container.textContent).not.toContain("GitHub token");
   });
 
-  it.each([false, true])("connects a GitHub App without managed OAuth (instance enrolled: %s)", async (configured) => {
+  it.each([
+    [false, "page"], [true, "page"], [false, "dialog"], [true, "dialog"],
+  ] as const)("connects a named GitHub App without managed OAuth (enrolled: %s, host: %s)", async (configured, host) => {
     mockSearch.value = "source=github";
     listGalleryMock.mockResolvedValue({
       apps: [{
@@ -1666,7 +1704,8 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
       configured,
       status: configured ? "active" : "not_configured",
     });
-    await render();
+    await render(undefined, false, host === "dialog"
+      ? <ConnectionSetupFlow host="dialog" serviceSlug="github" forceNewConnection /> : undefined);
     await act(async () => buttonByText("Connect to GitHub App")!.click());
     await flushReact();
 
@@ -1677,6 +1716,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     await act(async () => buttonContaining("Select agents")!.click());
     await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Allow Ada"]')!.click());
     await act(async () => {
+      setInputValue(container.querySelector<HTMLInputElement>('#connection-name')!, "Author bot");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
       setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
@@ -1686,6 +1726,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     await flushReact();
     expect(connectAppMock).toHaveBeenCalledWith("company-1", expect.objectContaining({
       connectionMethodKey: "app-installation",
+      name: "Author bot",
       grantKind: "agent",
       subjectAgentId: "agent-1",
     }));
@@ -3752,6 +3793,7 @@ describe("AppsConnect — guided generic MCP flow (PAP-17087)", () => {
     listGalleryMock.mockResolvedValue({ apps: [ZAPIER] });
     listApplicationsMock.mockResolvedValue({ applications: [] });
     listConnectionsMock.mockResolvedValue({ connections: [] });
+    listConnectionGrantsMock.mockResolvedValue({ grants: [] });
     listAgentsMock.mockResolvedValue([]);
     finishAppMock.mockResolvedValue({});
     putConnectionInstallsMock.mockResolvedValue({ connectionId: "conn-1", installs: [] });

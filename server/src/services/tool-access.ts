@@ -12362,9 +12362,16 @@ export function toolAccessService(
             .orderBy(desc(toolConnections.updatedAt))
             .limit(1)
         : [undefined];
-    const retainedConnection = requestedResumeConnection ?? recoveredConnection;
+    // Fresh setup must not inherit an archived App's fixed policy, owner or key.
+    // Explicit reconnect/resume continues to retain that identity.
+    const retainedConnection = requestedResumeConnection ?? (
+      recoveredConnection && isGitHubAppConnection(recoveredConnection)
+        && recoveredConnection.status === "archived"
+        ? undefined
+        : recoveredConnection
+    );
     let applicationName = existingApplication?.name ?? requestedName;
-    let name = retainedConnection?.name ?? requestedName;
+    let name = input.name ?? retainedConnection?.name ?? requestedName;
     if (!existingApplication) {
       const applicationNames = await db
         .select({ name: toolApplications.name })
