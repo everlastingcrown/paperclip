@@ -183,3 +183,7 @@ The archived connection and its revoked grants remain separate history; they
 are not silently revived with new credentials. Switching from a removed App to
 a token connection is also supported. Explicit reconnect/resume links continue
 the original connection and preserve its authority boundaries.
+
+Fresh setup also leaves unfinished App drafts separate. Use an explicit resume
+link to continue a saved draft; creating another connection does not inherit
+that draft's policy or credentials merely because its name matches.

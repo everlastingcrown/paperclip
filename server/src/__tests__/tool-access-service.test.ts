@@ -15867,8 +15867,9 @@ describeEmbeddedPostgres("tool access service", () => {
     },
   );
 
-  it.each(["managed", "mcp-key", "app-installation", "app-installation-explicit-app"])("creates a GitHub App after recovering an archived %s connection", async (scenario) => {
-    const previousMethod = scenario === "app-installation-explicit-app" ? "app-installation" : scenario;
+  it.each(["managed", "mcp-key", "app-installation", "app-installation-explicit-app", "app-installation-draft"])("creates a GitHub App after recovering a retained %s connection", async (scenario) => {
+    const previousMethod = scenario.startsWith("app-installation") ? "app-installation" : scenario;
+    const previousStatus = scenario === "app-installation-draft" ? "draft" as const : "archived" as const;
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
     const service = createTestToolAccessService(db, {
@@ -15880,12 +15881,12 @@ describeEmbeddedPostgres("tool access service", () => {
       companyId: company.id, principalType: "user", principalId: "board", membershipRole: "owner", status: "active",
     });
     const [application] = await db.insert(toolApplications).values({
-      companyId: company.id, name: "GitHub", type: "mcp_http", status: "archived",
+      companyId: company.id, name: "GitHub", type: "mcp_http", status: previousStatus,
       metadata: { sourceTemplateKey: "github" },
     }).returning();
     const [previous] = await db.insert(toolConnections).values({
       companyId: company.id, applicationId: application!.id, name: "GitHub", uid: `github-${randomUUID()}`, transport: "mcp_remote",
-      status: "archived", credentialPolicy: "shared",
+      status: previousStatus, credentialPolicy: "shared",
       config: { sourceTemplateKey: "github", connectionMethodKey: previousMethod, methodConfig: previousMethod === "app-installation"
         ? { version: "1", appId: "999", installationId: "888", repositories: "old/repo", permissionProfile: "author" } : {} },
     }).returning();
@@ -15914,7 +15915,7 @@ describeEmbeddedPostgres("tool access service", () => {
     }, actor);
     if (previousMethod === "app-installation") {
       expect(connected.connectionId).not.toBe(previous!.id);
-      expect(await service.getConnection(previous!.id, company.id)).toMatchObject({ status: "archived" });
+      expect(await service.getConnection(previous!.id, company.id)).toMatchObject({ status: previousStatus });
     } else {
       expect(connected.connectionId).toBe(previous!.id);
     }

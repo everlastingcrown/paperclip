@@ -12362,11 +12362,10 @@ export function toolAccessService(
             .orderBy(desc(toolConnections.updatedAt))
             .limit(1)
         : [undefined];
-    // Fresh setup must not inherit an archived App's fixed policy, owner or key.
+    // Fresh setup must not inherit an App's fixed policy, owner or key by name.
     // Explicit reconnect/resume continues to retain that identity.
     const retainedConnection = requestedResumeConnection ?? (
       recoveredConnection && isGitHubAppConnection(recoveredConnection)
-        && recoveredConnection.status === "archived"
         ? undefined
         : recoveredConnection
     );
