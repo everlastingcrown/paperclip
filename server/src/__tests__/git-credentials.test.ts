@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import type { Db } from "@paperclipai/db";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { connectionGrants, toolConnections, toolConnectionInstalls, type Db } from "@paperclipai/db";
+import * as appCredentials from "../services/github-app-credentials.js";
 import {
   DEFAULT_GITHUB_TOKEN_SECRET_NAMES,
   GIT_CREDENTIAL_TOKEN_ENV_KEY,
@@ -15,6 +16,7 @@ import {
 } from "../services/git-credentials.ts";
 
 const fakeDb = null as unknown as Db;
+afterEach(() => vi.restoreAllMocks());
 
 function buildSecretsFake(byName: Record<string, string | Error>) {
   const getByName = vi.fn(async (_companyId: string, name: string) => {
@@ -49,6 +51,44 @@ describe("isGitHubHttpsRemoteUrl", () => {
 
 describe("createGitRemoteAuthProvider", () => {
   const githubUrl = "https://github.com/example/repo.git";
+
+  it.each([false, true])("rechecks an App credential for each operation and fails closed (revoked: %s)", async (revoked) => {
+    const connection = {
+      id: "app-connection", companyId: "company-1", enabled: true, status: "active",
+      config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation" },
+    };
+    const dedicated = {
+      id: "app-grant", connectionId: connection.id, kind: "agent", subjectAgentId: "agent-1",
+      status: "active", credentialSecretRefs: [{ configPath: "credentials.privateKey", secretId: "pem" }],
+    };
+    const db = { select: () => ({ from: (table: unknown) => ({ where: async () => {
+      if (table === toolConnections) return [connection];
+      if (table === toolConnectionInstalls) return [{ connectionId: connection.id, targetType: "agent", targetId: "agent-1" }];
+      if (table === connectionGrants) return [dedicated, {
+        id: "personal-grant", connectionId: connection.id, kind: "user", subjectUserId: "user-1",
+      }];
+      throw new Error("Unexpected credential lookup");
+    } }) }) } as unknown as Db;
+    const acquire = vi.spyOn(appCredentials, "resolveGitHubAppCredential")
+      .mockResolvedValue({ token: "installation-token", expiresAt: Date.now() + 3_600_000,
+        github: { userId: "123", login: "app[bot]", installationCount: 1, repositoryCount: 1 } });
+    const secrets = buildSecretsFake({ GITHUB_TOKEN: "legacy-token" });
+    const provider = createGitRemoteAuthProvider(db, "company-1", {
+      agentId: "agent-1", responsibleUserId: "user-1",
+    }, { secrets, env: { GH_TOKEN: "environment-token" } });
+
+    expect((await provider(githubUrl))?.env[GIT_CREDENTIAL_TOKEN_ENV_KEY]).toBe("installation-token");
+    if (revoked) {
+      acquire.mockRejectedValueOnce(new Error("revoked App grant"));
+      await expect(provider(githubUrl)).rejects.toThrow("GitHub credentials are temporarily unavailable");
+    } else {
+      expect((await provider(githubUrl))?.env[GIT_CREDENTIAL_TOKEN_ENV_KEY]).toBe("installation-token");
+    }
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(acquire).toHaveBeenCalledWith(db, connection, dedicated);
+    expect(secrets.getByName).not.toHaveBeenCalled();
+    expect(secrets.resolveSecretValue).not.toHaveBeenCalled();
+  });
 
   it("prefers company secrets in declared order", async () => {
     const secrets = buildSecretsFake({ GH_TOKEN: "gh-token", PAPERCLIP_GITHUB_TOKEN: "pc-token" });

@@ -1,12 +1,26 @@
 import { and, eq } from "drizzle-orm";
 import { connectionGrants, toolConnections, toolConnectionInstalls, type Db } from "@paperclipai/db";
 import { resolveConnectionGrantSecret } from "./connection-credentials.js";
+import { unprocessable } from "../errors.js";
 import { createGitHubAppClient, GITHUB_APP_KEY_PATH, isGitHubAppConnection, parseGitHubAppConfig, githubAppFailure, rethrowGitHubAppFailure } from "./github-app-client.js";
 
 export { isGitHubAppConnection, parseGitHubAppConfig } from "./github-app-client.js";
 type Connection = typeof toolConnections.$inferSelect;
 type Grant = typeof connectionGrants.$inferSelect;
 const client = createGitHubAppClient();
+
+export async function getGitHubAppGrant(db: Db, connection: Connection): Promise<Grant> {
+  const grants = await db.select().from(connectionGrants).where(and(
+    eq(connectionGrants.companyId, connection.companyId),
+    eq(connectionGrants.connectionId, connection.id),
+    eq(connectionGrants.status, "active"),
+  ));
+  const grant = grants[0];
+  if (grants.length !== 1 || grant?.kind !== "agent" || !grant.subjectAgentId) {
+    throw unprocessable("Reconnect the dedicated GitHub App identity.");
+  }
+  return grant;
+}
 
 /** Authorization and vault ownership are rechecked even on a token-cache hit. */
 export async function resolveGitHubAppCredential(db: Db, connection: Connection, grant: Grant, allowDraft = false, force = false) {

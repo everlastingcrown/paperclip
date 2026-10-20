@@ -1218,9 +1218,10 @@ function StandardConnectionSetupFlow({
     queryFn: () => toolsApi.listConnectionGrants(identityConnection!.id),
     enabled: !!selectedCompanyId && retainedGitHubApp,
   });
-  const retainedAgentId = retainedAgentGrants.data?.grants.find(
-    (grant) => grant.kind === "agent" && grant.subjectAgentId,
-  )?.subjectAgentId;
+  const retainedAgentGrant = retainedAgentGrants.data?.grants.find(
+    (grant) => grant.kind === "agent" && grant.status === "active" && grant.subjectAgentId,
+  );
+  const retainedAgentId = retainedAgentGrant?.subjectAgentId;
   useEffect(() => {
     if (retainedAgentId) {
       setInstallAgentIds(new Set([retainedAgentId]));
@@ -1355,7 +1356,8 @@ function StandardConnectionSetupFlow({
           ? parseGoogleSheetIds(googleSheetsLinks).ids
           : [];
         const trimmedGalleryName = galleryName.trim();
-        const connectionName = trimmedGalleryName && trimmedGalleryName !== connectEntry.name
+        const connectionName = connectEntry.slug === "github" && selectedMethod?.key === "app-installation"
+          && trimmedGalleryName && trimmedGalleryName !== connectEntry.name
           ? trimmedGalleryName : connectionNameForGrantKind(
           trimmedGalleryName || connectEntry.name,
           requestedGrantKind,
@@ -2018,7 +2020,7 @@ function StandardConnectionSetupFlow({
   const renderConnectionDefaults = step === "key" ? (
     (extra?: ReactNode, forceOpen?: boolean) => (
     <>
-    <div className="mb-6">
+    {entry?.slug === "github" && connectionMethodKey === "app-installation" && <div className="mb-6">
       <label className="text-sm font-medium text-foreground" htmlFor="connection-name">Connection name</label>
       <Input
         id="connection-name"
@@ -2029,7 +2031,7 @@ function StandardConnectionSetupFlow({
         disabled={connectMutation.isPending || oauthStartMutation.isPending}
         className="mt-2 h-11"
       />
-    </div>
+    </div>}
     {retainedAgentGrants.isError && <InlineBanner tone="danger">
       Couldn’t load the assigned agent.
       <Button type="button" variant="link" disabled={retainedAgentGrants.isFetching} onClick={() => void retainedAgentGrants.refetch()}>Try again</Button>
@@ -2524,7 +2526,7 @@ function StandardConnectionSetupFlow({
             setConfigValues(defaultMethodConfig(nextMethod));
           }}
           savedCredentialPaths={identityConnection && connectionMethodKey === connectionInstructionsConfig(identityConnection).connectionMethodKey
-            ? retainedAgentGrants.data?.grants.find((grant) => grant.subjectAgentId === retainedAgentId)?.credentialSecretRefs.map((ref) => ref.configPath)
+            ? retainedAgentGrant?.credentialSecretRefs.map((ref) => ref.configPath)
             : undefined}
           fixedGitHubApp={retainedGitHubApp}
           configValues={configValues}

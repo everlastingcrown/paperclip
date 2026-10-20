@@ -14,7 +14,7 @@ import { browserUseService } from "./browser-use.js";
 import { COGNEE_STDIO_TEMPLATE, cogneeCloudUrl } from "./cognee-connection.js";
 import { isMemoryConnectorId, isRemoteMcpConnectorMethod, connectionPurposeTransportSchema } from "@paperclipai/shared";
 import { instanceSettingsService } from "./instance-settings.js";
-import { isGitHubAppConnection, parseGitHubAppConfig, resolveGitHubAppCredential } from "./github-app-credentials.js";
+import { getGitHubAppGrant, isGitHubAppConnection, parseGitHubAppConfig, resolveGitHubAppCredential } from "./github-app-credentials.js";
 import { createGitHubAppClient, GITHUB_APP_KEY_PATH, sanitizeGitHubAppFailure } from "./github-app-client.js";
 import { githubBotRequest } from "./chat-github-client.js";
 import { syncConnectionCredentialBindings } from "./connection-credential-bindings.js";
@@ -7401,11 +7401,7 @@ export function toolAccessService(
   }
 
   async function refreshGitHubAppAccess(connection: typeof toolConnections.$inferSelect, force = false) {
-    const grants = await db.select().from(connectionGrants).where(and(
-      eq(connectionGrants.companyId, connection.companyId), eq(connectionGrants.connectionId, connection.id), eq(connectionGrants.status, "active"),
-    ));
-    if (grants.length !== 1) throw unprocessable("Reconnect the dedicated GitHub App identity.");
-    const grant = grants[0]!;
+    const grant = await getGitHubAppGrant(db, connection);
     const result = await resolveGitHubAppCredential(db, connection, grant, connection.status === "draft", force);
     await db.update(connectionGrants).set({ providerTenant: { github: result.github }, updatedAt: now() }).where(and(
       eq(connectionGrants.id, grant.id), eq(connectionGrants.companyId, connection.companyId), eq(connectionGrants.status, "active"),
@@ -14346,15 +14342,7 @@ export function toolAccessService(
     let appGrant: typeof connectionGrants.$inferSelect | undefined;
     let appProviderTenant: (typeof connectionGrants.$inferSelect)["providerTenant"] = null;
     if (isGitHubAppConnection(connection)) {
-      const grants = await db.select().from(connectionGrants).where(and(
-        eq(connectionGrants.companyId, companyId),
-        eq(connectionGrants.connectionId, connection.id),
-        eq(connectionGrants.status, "active"),
-      ));
-      if (grants.length !== 1 || grants[0]!.kind !== "agent" || !grants[0]!.subjectAgentId) {
-        throw unprocessable("Reconnect the dedicated GitHub App identity.");
-      }
-      appGrant = grants[0]!;
+      appGrant = await getGitHubAppGrant(db, connection);
       const key = input.credentialValues[GITHUB_APP_KEY_PATH]?.trim();
       if (!key) throw badRequest("Enter a replacement GitHub App private key");
       const verified = await createGitHubAppClient().acquire(

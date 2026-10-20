@@ -420,7 +420,10 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
       id: connectionId, applicationId: "app-github", name: "Old bot", status: "active", credentialPolicy: "per_agent", authKind: "api_key",
       config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation", methodConfig: configValues }, transportConfig: {},
     }] });
-    listConnectionGrantsMock.mockResolvedValue({ grants: [{ kind: "agent", subjectAgentId: "agent-1", credentialSecretRefs: [{ configPath: "credentials.privateKey" }] }] });
+    listConnectionGrantsMock.mockResolvedValue({ grants: [
+      { kind: "agent", status: "revoked", subjectAgentId: "former-agent", credentialSecretRefs: [] },
+      { kind: "agent", status: "active", subjectAgentId: "agent-1", credentialSecretRefs: [{ configPath: "credentials.privateKey" }] },
+    ] });
     if (host === "page") listConnectionGrantsMock.mockRejectedValueOnce(new Error("temporary failure"));
     await render(undefined, false, <ConnectionSetupFlow host={host} serviceSlug="github" />);
     await flushReact();

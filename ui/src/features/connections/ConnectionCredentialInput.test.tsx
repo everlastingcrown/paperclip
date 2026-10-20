@@ -27,18 +27,20 @@ function render(configPath: string) {
 }
 
 describe("shared setup and reconnect credential input", () => {
-  it.each(["\n", "\r\n"])("preserves a pasted RSA PEM with %j line endings and later edits", (ending) => {
+  it.each(["\n", "\r\n"])("preserves a multiline RSA PEM with %j line endings and later edits", (ending) => {
     const container = render("credentials.privateKey");
     const input = container.querySelector("textarea")!;
     expect(input).not.toBeNull();
-    const paste = new Event("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(paste, "clipboardData", { value: { getData: () => pem.replace(/\n/g, ending) } });
-    act(() => input.dispatchEvent(paste));
+    // A textarea normalizes line endings as the browser applies pasted text.
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => {
+      setter.call(input, pem.replace(/\n/g, ending));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
     expect(container.querySelector("output")!.textContent).toBe(pem);
     expect(createPrivateKey(container.querySelector("output")!.textContent!).asymmetricKeyType).toBe("rsa");
 
     // Exercise an ordinary edit after paste, using the browser's native value setter.
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
     act(() => { setter.call(input, pem + "\n"); input.dispatchEvent(new Event("input", { bubbles: true })); });
     expect(container.querySelector("output")!.textContent).toBe(pem + "\n");
     expect(createPrivateKey(container.querySelector("output")!.textContent!).asymmetricKeyType).toBe("rsa");

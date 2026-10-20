@@ -1,4 +1,5 @@
 import { createHash, createPrivateKey, createSign } from "node:crypto";
+import { z } from "zod";
 import type { ConnectionGrant } from "@paperclipai/shared";
 import { HttpError, unprocessable } from "../errors.js";
 
@@ -78,10 +79,27 @@ export function githubAppJwt(appId: string, privateKey: string, now = Date.now()
   return `${header}.${body}.${signer.sign(key).toString("base64url")}`;
 }
 export type AppCredential = { token: string; expiresAt: number; github: NonNullable<Metadata> };
+
+// Validate provider responses before using them as identity or access evidence.
+const providerId = z.number().int().positive().safe();
+const appSchema = z.object({ id: providerId, client_id: z.string().optional(), slug: z.string().regex(/^[a-z0-9-]+$/) });
+const installationSchema = z.object({
+  id: providerId,
+  app_id: providerId,
+  suspended_at: z.string().nullable().optional(),
+  account: z.object({ login: z.string().min(1) }),
+  permissions: z.record(z.string(), z.string()),
+});
+const tokenSchema = z.object({ token: z.string().min(1), expires_at: z.string() });
+const botSchema = z.object({ id: providerId, login: z.string(), type: z.literal("Bot") });
+const repositoriesSchema = z.object({ repositories: z.array(z.object({
+  id: providerId, full_name: z.string(), private: z.boolean().optional(),
+})) });
+
 /** Fixed provider origin; never follow a redirect carrying an App JWT or token. */
 export function createGitHubAppClient(fetcher: typeof fetch = fetch, clock = Date.now) {
   const cache = new Map<string, { until: number; settled: boolean; promise: Promise<AppCredential> }>();
-  async function request(path: string, token: string, reason: FailureReason, body?: unknown): Promise<any> {
+  async function request<T>(path: string, token: string, reason: FailureReason, schema: z.ZodType<T>, body?: unknown): Promise<T> {
     let response: Response;
     try { response = await fetcher(`https://api.github.com${path}`, {
       method: body ? "POST" : "GET", redirect: "error", signal: AbortSignal.timeout(15_000),
@@ -90,37 +108,40 @@ export function createGitHubAppClient(fetcher: typeof fetch = fetch, clock = Dat
       ...(body ? { body: JSON.stringify(body) } : {}),
     }); } catch { githubAppFailure("network"); }
     if (!response.ok) githubAppFailure(reason);
-    try { return await response.json(); } catch { githubAppFailure(reason); }
+    try {
+      const parsed = schema.safeParse(await response.json());
+      if (parsed.success) return parsed.data;
+    } catch { /* Provider bodies and validation details must not escape. */ }
+    githubAppFailure(reason);
   }
   async function acquire(config: GitHubAppConfig, key: string): Promise<AppCredential> {
     let jwt: string;
     try { jwt = githubAppJwt(config.appId, key, clock()); } catch { githubAppFailure("private_key"); }
-    const app = await request("/app", jwt, "app_authentication");
-    const configuredAppId = config.appId.startsWith("Iv") ? app?.client_id : String(app?.id);
-    if (configuredAppId !== config.appId || !/^[1-9]\d*$/.test(String(app?.id)) || typeof app?.slug !== "string" || !/^[a-z0-9-]+$/.test(app.slug)) githubAppFailure("app_identity");
-    const installation = await request(`/app/installations/${config.installationId}`, jwt, "installation");
-    if (String(installation?.id) !== config.installationId || String(installation?.app_id) !== String(app.id)
-      || installation?.suspended_at || typeof installation?.account?.login !== "string") githubAppFailure("installation");
+    const app = await request("/app", jwt, "app_authentication", appSchema);
+    const configuredAppId = config.appId.startsWith("Iv") ? app.client_id : String(app.id);
+    if (configuredAppId !== config.appId) githubAppFailure("app_identity");
+    const installation = await request(`/app/installations/${config.installationId}`, jwt, "installation", installationSchema);
+    if (String(installation.id) !== config.installationId || installation.app_id !== app.id
+      || installation.suspended_at) githubAppFailure("installation");
     const owner = installation.account.login.toLowerCase();
     if (config.repositories.some(repo => repo.split("/")[0] !== owner)) githubAppFailure("repositories");
     for (const [name, level] of Object.entries(config.permissions)) {
       const allowed = installation.permissions?.[name];
       if (allowed !== "write" && allowed !== level) githubAppFailure("permissions");
     }
-    const minted = await request(`/app/installations/${config.installationId}/access_tokens`, jwt, "token", {
+    const minted = await request(`/app/installations/${config.installationId}/access_tokens`, jwt, "token", tokenSchema, {
       repositories: config.repositories.map(repo => repo.split("/")[1]), permissions: config.permissions,
     });
     const expiresAt = Date.parse(minted.expires_at);
-    if (typeof minted.token !== "string" || !minted.token.trim() || !Number.isFinite(expiresAt) || expiresAt <= clock() + 60_000) githubAppFailure("token");
+    if (!minted.token.trim() || !Number.isFinite(expiresAt) || expiresAt <= clock() + 60_000) githubAppFailure("token");
     // Identity is the provider's bot account, never the installation owner.
-    const bot = await request(`/users/${encodeURIComponent(`${app.slug}[bot]`)}`, minted.token, "bot_identity");
-    if (bot.login !== `${app.slug}[bot]` || bot.type !== "Bot" || !Number.isSafeInteger(bot.id) || bot.id < 1) githubAppFailure("bot_identity");
+    const bot = await request(`/users/${encodeURIComponent(`${app.slug}[bot]`)}`, minted.token, "bot_identity", botSchema);
+    if (bot.login !== `${app.slug}[bot]`) githubAppFailure("bot_identity");
     const repositories: NonNullable<NonNullable<Metadata>["repositories"]> = [];
     for (let page = 1; page <= 6; page++) {
-      const data = await request(`/installation/repositories?per_page=100&page=${page}`, minted.token, "repositories");
-      if (!Array.isArray(data.repositories)) githubAppFailure("repositories");
+      const data = await request(`/installation/repositories?per_page=100&page=${page}`, minted.token, "repositories", repositoriesSchema);
       for (const repo of data.repositories) {
-        if (!Number.isSafeInteger(repo.id) || typeof repo.full_name !== "string" || !config.repositories.includes(repo.full_name.toLowerCase())) githubAppFailure("repositories");
+        if (!config.repositories.includes(repo.full_name.toLowerCase())) githubAppFailure("repositories");
         repositories.push({ id: String(repo.id), fullName: repo.full_name, installationId: config.installationId, private: repo.private === true });
       }
       if (data.repositories.length < 100) break;
@@ -155,7 +176,10 @@ export function createGitHubAppClient(fetcher: typeof fetch = fetch, clock = Dat
         entry.until = Math.min(entry.until, result.expiresAt - 60_000);
         entry.settled = true;
         return result;
-      } catch (error) { if (cache.get(cacheKey) === entry) cache.delete(cacheKey); rethrowGitHubAppFailure(error); }
+      } catch (error) {
+        if (cache.get(cacheKey) === entry) cache.delete(cacheKey);
+        throw error; // The shared promise already sanitized the failure for every caller.
+      }
     },
   };
 }
