@@ -1922,6 +1922,21 @@ describeEmbeddedPostgres("tool access service", () => {
         maxConnections: 1,
       });
       const replacementService = createTestToolAccessService(replacementDb);
+      const [cleanupBackend] = await cleanupDb.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+      const [replacementBackend] = await replacementDb.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+      let firstReplacementPid!: number;
+      async function waitForBlockedBackend(waiterPid: number, holderPid: number) {
+        await vi.waitFor(async () => {
+          const [row] = await db.execute<{ blocked: boolean }>(sql`
+            select exists (
+              select 1 from pg_stat_activity
+              where datname = current_database() and pid = ${waiterPid}
+                and ${holderPid} = any(pg_blocking_pids(pid))
+            ) as blocked
+          `);
+          expect(row?.blocked).toBe(true);
+        }, { timeout: 5_000, interval: 10 });
+      }
       let releaseFirstReplacement!: () => void;
       const firstReplacementMayCommit = new Promise<void>((resolve) => {
         releaseFirstReplacement = resolve;
@@ -1940,6 +1955,8 @@ describeEmbeddedPostgres("tool access service", () => {
       });
 
       const firstReplacement = firstReplacementDb.transaction(async (tx) => {
+        const [backend] = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+        firstReplacementPid = backend!.pid;
         const service = createTestToolAccessService(
           tx as unknown as ReturnType<typeof createDb>,
         );
@@ -1977,30 +1994,39 @@ describeEmbeddedPostgres("tool access service", () => {
         }
       });
 
-      // The first replacement still owns the departing member lock, so this
-      // gives cleanup time to queue for that lock before the empty replacement
-      // queues for the grant lock.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      let replacement: Promise<{ value: unknown; error: unknown }> | undefined;
+      let replacementResult!: { value: unknown; error: unknown };
       let replacementSettled = false;
-      const replacement = replacementService
-        .replaceConnectionGrantMembers(connection.id, grant.id, [])
-        .then(
-          (value) => ({ value, error: null }),
-          (error: unknown) => ({ value: null, error }),
-        )
-        .finally(() => {
-          replacementSettled = true;
-        });
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(replacementSettled).toBe(false);
+      try {
+        // Confirm cleanup has queued for the membership lock before allowing
+        // the empty replacement to queue for the grant. Sleeps do not prove
+        // this ordering when CI delays a backend's first query.
+        await waitForBlockedBackend(cleanupBackend!.pid, firstReplacementPid);
+        replacement = replacementService
+          .replaceConnectionGrantMembers(connection.id, grant.id, [])
+          .then(
+            (value) => ({ value, error: null }),
+            (error: unknown) => ({ value: null, error }),
+          )
+          .finally(() => {
+            replacementSettled = true;
+          });
+        await waitForBlockedBackend(replacementBackend!.pid, firstReplacementPid);
+        expect(replacementSettled).toBe(false);
 
-      releaseFirstReplacement();
-      await firstReplacement;
-      await membershipIsLocked;
-      expect(replacementSettled).toBe(false);
-      releaseCleanup();
-      await cleanup;
-      const replacementResult = await replacement;
+        releaseFirstReplacement();
+        await firstReplacement;
+        await membershipIsLocked;
+        await waitForBlockedBackend(replacementBackend!.pid, cleanupBackend!.pid);
+        expect(replacementSettled).toBe(false);
+        releaseCleanup();
+        await cleanup;
+        replacementResult = await replacement;
+      } finally {
+        releaseFirstReplacement();
+        releaseCleanup();
+        await Promise.allSettled([firstReplacement, cleanup, replacement]);
+      }
       expect(replacementResult.value).toBeNull();
       expect(replacementResult.error).toEqual(
         expect.objectContaining({
@@ -15844,7 +15870,7 @@ describeEmbeddedPostgres("tool access service", () => {
       const app = createRouteApp(db);
       const guidance = {
         private_key: "The private key could not be read as an RSA PEM.",
-        permissions: "The installation lacks required permissions.",
+        permissions: "The installation lacks the selected permissions.",
         installation: "GitHub could not verify this installation for the App.",
         network: "The GitHub request failed.",
       }[reason];
