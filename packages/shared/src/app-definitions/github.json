@@ -95,10 +95,12 @@
         "customer"
       ],
       "grantKinds": [
+        "user",
+        "organization",
         "agent"
       ],
-      "whenToUse": "Give one agent its own GitHub bot identity for Git and gh.",
-      "guidanceMd": "Register a public or private GitHub App and install it on the repositories this agent should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides Git and gh credentials; it does not provide MCP tools.",
+      "whenToUse": "Use a GitHub App bot identity for selected agents or all agents through Git and gh.",
+      "guidanceMd": "Register a public or private GitHub App and install it on the repositories eligible agents should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides Git and gh credentials; it does not provide MCP tools.",
       "riskTier": "S3",
       "tenantFields": [
         {
@@ -173,7 +175,7 @@
         }
       ],
       "warnings": [
-        "Shell Git and gh use the assigned bot identity regardless of who starts the task. Per-tool Ask-first controls do not restrict these credentials.",
+        "Shell Git and gh use this bot identity within the saved ownership and agent access choices. Per-tool Ask-first controls do not restrict these credentials.",
         "Existing tokens can remain usable until GitHub expires or revokes them. Use separate Apps for author and reviewer identities."
       ],
       "consoleLinks": {

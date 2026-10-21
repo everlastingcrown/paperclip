@@ -12783,12 +12783,12 @@ export function toolAccessService(
       retainedMethodKey === method?.key &&
       (!remoteMcpConnector || (baseConfig.url === retainedConfig.url && genericAuthKind === retainedConnection.authKind)),
     );
-    const retainedAppGrant = canRetainCredentialMaterial && dedicatedAgentId && method?.key === "app-installation"
-      ? (await db.select().from(connectionGrants).where(and(eq(connectionGrants.companyId, companyId),
-          eq(connectionGrants.connectionId, retainedConnection!.id), eq(connectionGrants.subjectAgentId, dedicatedAgentId), eq(connectionGrants.kind, "agent"))))[0]
+    const retainedAppGrant = canRetainCredentialMaterial && retainedConnection && isGitHubAppConnection(retainedConnection)
+      ? await getGitHubAppGrant(db, retainedConnection)
       : undefined;
-    if (retainedConnection && isGitHubAppConnection(retainedConnection) && (!retainedAppGrant || !dedicatedAgentId || method?.key !== "app-installation")) {
-      throw badRequest("Reconnect must preserve the assigned GitHub App agent and method.");
+    if (retainedConnection && isGitHubAppConnection(retainedConnection) && (!retainedAppGrant || method?.key !== "app-installation"
+      || (retainedAppGrant.kind === "agent" && retainedAppGrant.subjectAgentId !== dedicatedAgentId))) {
+      throw badRequest("Reconnect must preserve the GitHub App ownership and method.");
     }
     const retainedCredentialSecretRefs = canRetainCredentialMaterial
       ? (retainedAppGrant?.credentialSecretRefs ?? retainedPersonalIdentity?.grant?.credentialSecretRefs ??
@@ -13789,11 +13789,11 @@ export function toolAccessService(
     if (connection.status === "archived")
       throw conflict("Archived app connections cannot be finished");
     if (isGitHubAppConnection(connection)) {
-      const grants = await db.select().from(connectionGrants).where(and(eq(connectionGrants.companyId, companyId), eq(connectionGrants.connectionId, connection.id)));
-      const dedicated = grants.filter(grant => grant.kind === "agent" && grant.status === "active");
-      if (dedicated.length !== 1 || input.access === "all_agents" || input.access.agentIds.length !== 1 || input.access.agentIds[0] !== dedicated[0]!.subjectAgentId
+      const grant = await getGitHubAppGrant(db, connection);
+      if ((grant.kind === "agent" && (input.access === "all_agents" || input.access.agentIds.length !== 1
+          || input.access.agentIds[0] !== grant.subjectAgentId))
         || input.enabledCatalogEntryIds.length || input.askFirstCatalogEntryIds.length) {
-        throw badRequest("A GitHub App connection provides Git and gh access only to its assigned agent.");
+        throw badRequest("A GitHub App provides Git and gh only; dedicated identities require their assigned agent.");
       }
       await refreshGitHubAppAccess(connection);
     }
@@ -14427,8 +14427,8 @@ export function toolAccessService(
           companyId, connectionId: connection.id,
           actorType: binding.actorType ?? "system", actorId: binding.actorId,
           action: "connection_grant.updated", outcome: "success",
-          reasonCode: "dedicated_identity_reconnected",
-          details: { kind: "agent", subjectAgentId: appGrant.subjectAgentId },
+          reasonCode: "github_app_identity_reconnected",
+          details: { kind: appGrant.kind, subjectAgentId: appGrant.subjectAgentId, subjectUserId: appGrant.subjectUserId },
         });
       }
       if (personalIdentity) {
@@ -14463,7 +14463,7 @@ export function toolAccessService(
           credentialRefs: appGrant ? [] : credentialRefs,
           // Personal reconnect rotates the existing user's grant. The
           // connection-level organization slot stays exactly as it was.
-          credentialSecretRefs: appGrant ? [] : personalIdentity
+          credentialSecretRefs: appGrant && appGrant.kind !== "organization" ? [] : personalIdentity
             ? connection.credentialSecretRefs
             : credentialSecretRefs,
           lastError: null,
@@ -17780,10 +17780,14 @@ export function toolAccessService(
         )
           continue;
         if (isGitHubAppConnection(connection)) {
-          // These keys are company-owned dedicated identities. Share only the
-          // verified repository metadata with company members configuring a
-          // project, never credentials or authority to read repository files.
+          // Dedicated metadata remains company-visible. Personal/shared
+          // metadata uses the same human audience as other GitHub methods.
           if (!options.includeGitHubApps || !(localTrusted || memberships.length > 0)) continue;
+          if (connection.credentialPolicy !== "per_agent" && !grants.some(grant =>
+            grant.connectionId === connection.id && canBrowseProjectRepositoryGrant({
+              grant, userId, activeMember: localTrusted || memberships.length > 0,
+              audience: members.filter(member => member.grantId === grant.id).map(member => member.subjectId),
+            }))) continue;
           connectionCount += 1;
           usableConnections.push({ id: connection.id, name: connection.name });
           try {

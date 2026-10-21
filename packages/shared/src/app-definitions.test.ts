@@ -297,10 +297,10 @@ describe("AppDefinition catalog", () => {
     for (const id of ["123456", "Iv1.0123456789abcdef", "Iv23li0123456789abcd"]) expect(appIdPattern.test(id)).toBe(true);
     expect(installationIdPattern.test("12345678")).toBe(true);
     expect(installationIdPattern.test("Iv1.0123456789abcdef")).toBe(false);
-    expect(installation).toMatchObject({ transport: "rest_api", auth: "api_key", credentialExchange: "github_app_installation", grantKinds: ["agent"] });
+    expect(installation).toMatchObject({ transport: "rest_api", auth: "api_key", credentialExchange: "github_app_installation", grantKinds: ["user", "organization", "agent"] });
     expect(installation.keyPlacement).toBeUndefined();
     expect(appDefinitionSchema.safeParse(github).success).toBe(true);
-    expect(appDefinitionSchema.safeParse({ ...github, methods: [{ ...installation, grantKinds: ["user"] }] }).success).toBe(false);
+    expect(appDefinitionSchema.safeParse({ ...github, methods: [{ ...installation, grantKinds: ["user"] }] }).success).toBe(true);
     expect(appDefinitionSchema.safeParse({ ...github, methods: [{ ...installation, transport: "mcp_remote" }] }).success).toBe(false);
     expect(bot.name).toBe("GitHub Code Review Bot");
     expect(bot.methods).toHaveLength(1);

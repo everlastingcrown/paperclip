@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { connectionGrants, toolConnections, toolConnectionInstalls, type Db } from "@paperclipai/db";
+import { companyMemberships, connectionGrantMembers, connectionGrants, toolConnections, toolConnectionInstalls, type Db } from "@paperclipai/db";
 import * as appCredentials from "../services/github-app-credentials.js";
 import {
   DEFAULT_GITHUB_TOKEN_SECRET_NAMES,
@@ -13,6 +13,8 @@ import {
   describeGitAuthFailure,
   isGitHubHttpsRemoteUrl,
   scrubGitCredentialText,
+  resolveManagedGitHubIdentitySelection,
+  resolveManagedGitHubCredential,
 } from "../services/git-credentials.ts";
 
 const fakeDb = null as unknown as Db;
@@ -46,6 +48,48 @@ describe("isGitHubHttpsRemoteUrl", () => {
     expect(isGitHubHttpsRemoteUrl("https://gitlab.com/example/repo.git")).toBe(false);
     expect(isGitHubHttpsRemoteUrl("https://alice:token@github.com/example/repo.git")).toBe(false);
     expect(isGitHubHttpsRemoteUrl("/local/path/repo.git")).toBe(false);
+  });
+});
+
+describe("GitHub App ownership and agent reach", () => {
+  it.each(["user", "organization"] as const)("selects %s ownership for multiple and all agents without crossing a personal owner", async kind => {
+    const connection = { id: "app", enabled: true, status: "active", credentialPolicy: kind === "user" ? "per_user" : "shared",
+      config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation" } };
+    const grant = { id: "grant", connectionId: "app", kind, subjectUserId: kind === "user" ? "owner" : null, status: "active", credentialSecretRefs: [], createdAt: new Date() };
+    let audience: Array<{ grantId: string; subjectId: string }> = [];
+    let installs = ["a", "b"].map(targetId => ({ connectionId: "app", targetType: "agent", targetId }));
+    const db = { select: () => ({ from: (table: unknown) => ({ where: () => {
+      const rows = table === toolConnections ? [connection]
+        : table === toolConnectionInstalls ? installs
+        : table === connectionGrants ? [grant]
+        : table === connectionGrantMembers ? audience
+        : table === companyMemberships ? [{ id: "member" }] : [];
+      return Object.assign(Promise.resolve(rows), { limit: async () => rows });
+    } }) }) } as unknown as Db;
+    for (const agentId of ["a", "b"]) {
+      expect((await resolveManagedGitHubIdentitySelection(db, "company", { agentId, responsibleUserId: "owner" })).grant).toBe(grant);
+    }
+    expect(await resolveManagedGitHubIdentitySelection(db, "company", { agentId: "c", responsibleUserId: "owner" })).toEqual({ configured: false });
+    const otherOwner = await resolveManagedGitHubIdentitySelection(db, "company", { agentId: "a", responsibleUserId: "other" });
+    expect(otherOwner.grant).toBe(kind === "user" ? undefined : grant);
+    installs = [{ connectionId: "app", targetType: "company", targetId: "company" }];
+    expect((await resolveManagedGitHubIdentitySelection(db, "company", { agentId: "new", responsibleUserId: "owner" })).grant).toBe(grant);
+    if (kind === "organization") {
+      audience = [{ grantId: "grant", subjectId: "owner" }];
+      expect((await resolveManagedGitHubIdentitySelection(db, "company", { agentId: "a", responsibleUserId: "other" })).grant).toBeUndefined();
+      expect((await resolveManagedGitHubIdentitySelection(db, "company", { agentId: "a", allowStandingDelegation: false })).grant).toBeUndefined();
+      vi.spyOn(appCredentials, "resolveGitHubAppCredential").mockImplementationOnce(async () => {
+        audience = [{ grantId: "grant", subjectId: "other" }];
+        return { token: "installation-token", expiresAt: Date.now() + 3_600_000,
+          github: { userId: "123", login: "app[bot]", installationCount: 1, repositoryCount: 1 } };
+      });
+      const changed = await resolveManagedGitHubCredential(db, buildSecretsFake({}), "company", { agentId: "a", responsibleUserId: "owner" });
+      expect(changed.credential).toBeUndefined();
+      expect(changed.error).toBeDefined();
+      audience = [];
+    }
+    grant.status = "revoked";
+    expect((await resolveManagedGitHubIdentitySelection(db, "company", { agentId: "a", responsibleUserId: "owner" })).grant).toBeUndefined();
   });
 });
 
@@ -85,7 +129,7 @@ describe("createGitRemoteAuthProvider", () => {
       expect((await provider(githubUrl))?.env[GIT_CREDENTIAL_TOKEN_ENV_KEY]).toBe("installation-token");
     }
     expect(acquire).toHaveBeenCalledTimes(2);
-    expect(acquire).toHaveBeenCalledWith(db, connection, dedicated);
+    expect(acquire).toHaveBeenCalledWith(db, connection, dedicated, false, false, "agent-1");
     expect(secrets.getByName).not.toHaveBeenCalled();
     expect(secrets.resolveSecretValue).not.toHaveBeenCalled();
   });

@@ -1,7 +1,7 @@
 # Customer-owned GitHub App credentials
 
-Use **GitHub → Customer-owned GitHub App** to give one agent an App's bot identity
-for managed Git, `gh`, and server-side repository checkout/fetch. Both public and
+Use **GitHub → Customer-owned GitHub App** to give selected agents or all agents
+an App's bot identity for managed Git, `gh`, and server-side repository checkout/fetch. Both public and
 private GitHub.com App registrations use installation access tokens. This method
 has no MCP tools and does not use GitHub's hosted MCP endpoint. The REST transport
 is implemented by the GitHub repository credential adapter, not a generic REST
@@ -19,12 +19,13 @@ tool executor. Existing managed OAuth and PAT methods remain available.
    unavailable, select **Connect to GitHub App** directly. Otherwise, under the
    connection method choices, select **Customer-owned GitHub App**. This method
    requires neither Paperclip Cloud enrollment nor authorization of the official
-   Paperclip OAuth app. Choose the agent that owns the bot identity.
+   Paperclip OAuth app. Choose personal or shared ownership, then select agents
+   or allow all agents. Dedicated ownership remains available for one agent.
 4. Enter the App ID or Client ID, installation ID, and explicit `owner/repository` list.
    Paste the complete PEM key, including its header, footer, and line breaks,
    into the multiline private-key field. Choose a permission profile and connect.
 5. Paperclip verifies the App, installation, bot account, and repository access.
-   Finish setup for the selected agent. Failed verification leaves no working
+   Finish setup for the selected agent access. Failed verification leaves no working
    connection and cleans up the new credential using the normal setup rollback.
 
 | Profile | Contents | Pull requests | Issues |
@@ -55,14 +56,20 @@ name. Its old settings are not a GitHub App policy and must not be validated as
 one. Existing GitHub App connections still preserve their App, installation,
 repositories, and permission profile on resume or reconnect.
 
-The verified `app-slug[bot]` identity appears on the connection. It acts for this
-agent regardless of the person who starts a task. A dedicated identity takes
+The verified `app-slug[bot]` identity appears on the connection. Personal
+connections use a user-owned key and are available when that owner is responsible
+for the run, or through explicit standing delegation for ownerless work. Shared
+connections use a company-owned key regardless of who starts the run. Both can
+serve selected agents or all current and future agents. Ownership does not change
+the provider bot identity. A dedicated identity takes
 precedence over personal credentials. Disabled, revoked, missing, and ambiguous
 assignments fail closed. Create **separate App registrations** for independent
 author and reviewer bot identities; two installations of one App share its bot.
 
-Company members (or the local trusted board) can select the App's verified,
-explicitly configured repositories when creating or configuring a project.
+For shared and dedicated connections, company members (or the local trusted
+board) can select the App's verified, explicitly configured repositories when creating or configuring a project.
+Personal App repository metadata remains visible only to the credential owner.
+Shared App metadata follows the saved human audience.
 The project picker refreshes App access and shows connection failures through
 its normal retry flow. Selecting a repository stores its identity and URL; it
 does not grant other agents the App identity or repository access.
@@ -83,8 +90,10 @@ permissions. That runtime object is not a setup/API form payload.
 
 ## Renewal, rotation, and removal
 
-The PEM remains in Paperclip's encrypted company vault. It is bound to the exact
-dedicated grant and is never placed in agent instructions, environment variables,
+The PEM remains in Paperclip's encrypted vault: user-owned for personal
+connections and company-owned for shared and dedicated connections. It is bound
+to the exact connection grant and is never placed in agent instructions,
+environment variables,
 Git configuration, or provider request headers. Only a short-lived installation
 token reaches the existing run/session credential broker.
 
@@ -103,9 +112,10 @@ Local disablement, grant revocation, and uninstall stop new acquisition immediat
 Already-exported tokens can remain usable until GitHub expires or revokes them;
 clearing a local cache does not revoke tokens held by a running process.
 
-Use **Reconnect** to replace the private key. The connection, assigned agent,
-installation, repositories, and permissions stay fixed. Changing those choices
-requires a new connection. Removing a connection in Paperclip does not uninstall
+Use **Reconnect** to replace the private key. The connection, ownership, agent
+access, installation, repositories, and permissions stay fixed. Use Permissions
+to change agent access. Changing ownership or App scope requires a new connection.
+Removing a connection in Paperclip does not uninstall
 the App from GitHub or delete its registration. Manage those in GitHub settings.
 
 ## Verification and current limits
@@ -126,7 +136,7 @@ installation-token authentication are outside this method.
 
 GitHub App setup in Connectors and Projects includes **Connection name**.
 Choose a name to distinguish bot identities, and edit it when reconnecting.
-Reconnect restores the assigned agent, keeps the App, installation and access
+Reconnect restores ownership and agent access, keeps the App and installation
 policy fixed, and lets you keep the saved key by leaving its field blank.
 
 After **Remove**, adding a connection starts a fresh GitHub App identity even

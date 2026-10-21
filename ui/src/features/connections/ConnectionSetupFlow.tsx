@@ -1213,15 +1213,26 @@ function StandardConnectionSetupFlow({
   const fixedGrantKind = reconnectGrantKind ?? existingOAuthGrantKind;
   const retainedGitHubApp = Boolean(identityConnection && connectionInstructionsConfig(identityConnection).sourceTemplateKey === "github"
     && connectionInstructionsConfig(identityConnection).connectionMethodKey === "app-installation");
-  const retainedAgentGrants = useQuery({
+  const retainedAppGrants = useQuery({
     queryKey: queryKeys.tools.connectionGrants(identityConnection?.id ?? "__none__"),
     queryFn: () => toolsApi.listConnectionGrants(identityConnection!.id),
     enabled: !!selectedCompanyId && retainedGitHubApp,
   });
-  const retainedAgentGrant = retainedAgentGrants.data?.grants.find(
-    (grant) => grant.kind === "agent" && grant.status === "active" && grant.subjectAgentId,
+  const retainedAppGrant = retainedAppGrants.data?.grants.find(
+    (grant) => grant.kind === reconnectGrantKind && grant.status === "active",
   );
-  const retainedAgentId = retainedAgentGrant?.subjectAgentId;
+  const retainedInstalls = useQuery({
+    queryKey: ["github-app-reconnect-installs", identityConnection?.id],
+    queryFn: () => toolsApi.getConnectionInstalls(identityConnection!.id),
+    enabled: !!selectedCompanyId && retainedGitHubApp,
+  });
+  useEffect(() => {
+    if (!retainedInstalls.data || reconnectGrantKind === "agent") return;
+    const installs = retainedInstalls.data.installs;
+    setInstallChoice(installs.some(install => install.targetType === "company") ? "all" : "specific");
+    setInstallAgentIds(new Set(installs.filter(install => install.targetType === "agent").map(install => install.targetId)));
+  }, [retainedInstalls.data, reconnectGrantKind]);
+  const retainedAgentId = retainedAppGrant?.subjectAgentId;
   useEffect(() => {
     if (retainedAgentId) {
       setInstallAgentIds(new Set([retainedAgentId]));
@@ -1333,9 +1344,8 @@ function StandardConnectionSetupFlow({
   };
 
   const effectiveGrantKind = fixedGrantKind ?? grantKind;
-  const dedicatedAgentSelectionValid = effectiveGrantKind !== "agent" || (
-    retainedGitHubApp ? Boolean(retainedAgentId) : installAgentIds.size === 1
-  );
+  const dedicatedAgentSelectionValid = (!retainedGitHubApp || Boolean(retainedAppGrant && retainedInstalls.data))
+    && (effectiveGrantKind !== "agent" || (retainedGitHubApp ? Boolean(retainedAgentId) : installAgentIds.size === 1));
   useEffect(() => {
     if (effectiveGrantKind === "agent") setInstallChoice("specific");
   }, [effectiveGrantKind]);
@@ -2032,9 +2042,9 @@ function StandardConnectionSetupFlow({
         className="mt-2 h-11"
       />
     </div>}
-    {retainedAgentGrants.isError && <InlineBanner tone="danger">
-      Couldn’t load the assigned agent.
-      <Button type="button" variant="link" disabled={retainedAgentGrants.isFetching} onClick={() => void retainedAgentGrants.refetch()}>Try again</Button>
+    {(retainedAppGrants.isError || retainedInstalls.isError) && <InlineBanner tone="danger">
+      Couldn’t load the saved connection ownership.
+      <Button type="button" variant="link" disabled={retainedAppGrants.isFetching} onClick={() => { void retainedAppGrants.refetch(); void retainedInstalls.refetch(); }}>Try again</Button>
     </InlineBanner>}
     <ConnectionAccessDefaults
       key="connection-defaults"
@@ -2047,7 +2057,7 @@ function StandardConnectionSetupFlow({
         installChoice,
         installCount: installAgentIds.size,
         lockedAgentId: requestedAgentId ?? null,
-        preserveAgentAccess: Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection)),
+        preserveAgentAccess: retainedGitHubApp || Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection)),
       })}
       notice={[
         galleryQuery.data?.capabilities?.canCreateOrganizationGrant === false
@@ -2072,8 +2082,8 @@ function StandardConnectionSetupFlow({
       capabilities={galleryQuery.data?.capabilities}
       githubIdentity={entry?.slug === "github"}
       identityLoading={Boolean(automaticOAuthEntry) && directOAuthLookupPending}
-      preserveAgentAccess={Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection))}
-      disabled={connectMutation.isPending || oauthStartMutation.isPending || Boolean(retainedAgentId)}
+      preserveAgentAccess={retainedGitHubApp || Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection))}
+      disabled={connectMutation.isPending || oauthStartMutation.isPending || retainedGitHubApp}
     />
     {entry && instructionTemplate && instructionValue && <div className="mt-6"><ConnectionInstructionsEditor provider={entry.name} template={instructionTemplate} value={instructionValue} onChange={(value) => setInstructionDraft({ slug: entry.slug, value })} disabled={connectMutation.isPending || oauthStartMutation.isPending} /></div>}
     {additionalSettings && <div className="mt-6">{additionalSettings}</div>}
@@ -2526,7 +2536,7 @@ function StandardConnectionSetupFlow({
             setConfigValues(defaultMethodConfig(nextMethod));
           }}
           savedCredentialPaths={identityConnection && connectionMethodKey === connectionInstructionsConfig(identityConnection).connectionMethodKey
-            ? retainedAgentGrant?.credentialSecretRefs.map((ref) => ref.configPath)
+            ? retainedAppGrant?.credentialSecretRefs.map((ref) => ref.configPath)
             : undefined}
           fixedGitHubApp={retainedGitHubApp}
           configValues={configValues}
@@ -3852,7 +3862,7 @@ function KeyStep({
         {error ? <div role="alert"><InlineBanner tone="danger">{error}</InlineBanner></div> : null}
 
         {savedCredentialPaths.length > 0 ? <p className="text-sm text-muted-foreground">Leave the key blank to keep the saved credential, or paste a replacement.</p> : null}
-        {fixedGitHubApp ? <p className="text-sm text-muted-foreground">Reconnect keeps this App, installation, repositories, permission profile and assigned agent. Create a new connection to change them.</p> : null}
+        {fixedGitHubApp ? <p className="text-sm text-muted-foreground">Reconnect keeps this App, installation, repositories, permission profile, ownership and agent access. Create a new connection to change them.</p> : null}
         <fieldset disabled={fixedGitHubApp} className="space-y-6">
           {standardConfigFields.map((field) => (
             <MethodConfigField

@@ -388,6 +388,8 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     await act(async () => radioContaining("Customer-owned GitHub App")!.click());
     await flushReact();
 
+    await openAccessAdvanced();
+    await act(async () => radioContaining("A dedicated account for an agent")!.click());
     expect(buttonContaining("Select agents")).toBeDefined();
     await act(async () => {
       setInputValue(container.querySelector<HTMLInputElement>('#connection-name')!, "Author bot");
@@ -410,26 +412,63 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     }));
   });
 
-  it.each(["page", "dialog"] as const)("restores and renames a GitHub App on %s reconnect without requiring a new key", async (host) => {
+  it.each([
+    ["page", "user", "specific"], ["dialog", "user", "all"],
+    ["page", "organization", "all"], ["dialog", "organization", "specific"],
+  ] as const)("connects an App on %s with %s ownership and %s agent access", async (host, kind, reach) => {
+    mockSearch.value = "source=github&method=app-installation";
+    listGalleryMock.mockResolvedValue({ apps: [GITHUB_MANAGED] });
+    await render(undefined, false, <ConnectionSetupFlow host={host} serviceSlug="github" />);
+    await openAccessAdvanced();
+    await act(async () => radioContaining(kind === "user" ? "My GitHub account" : "Shared organization GitHub account")!.click());
+    if (reach === "specific") {
+      await act(async () => radioContaining("Only agents I choose")!.click());
+      await act(async () => buttonContaining("Select agents")!.click());
+      await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Allow Ada"]')!.click());
+      await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Allow Grace"]')!.click());
+    } else {
+      await act(async () => radioContaining("Any agent")!.click());
+    }
+    await act(async () => {
+      setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
+      setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[autocomplete="off"]')!, "fixture-pem");
+    });
+    await act(async () => buttonByText("Connect")!.click());
+    await flushReact();
+    const submitted = connectAppMock.mock.calls[0]![1];
+    expect(submitted.connectionMethodKey).toBe("app-installation");
+    expect(submitted.grantKind ?? "organization").toBe(kind);
+    expect(submitted.subjectAgentId).toBeUndefined();
+    expect(finishAppMock).toHaveBeenCalledWith("company-1", "conn-1", expect.objectContaining({
+      access: reach === "all" ? "all_agents" : { agentIds: ["agent-1", "agent-2"] },
+    }));
+  });
+
+  it.each([["page", "agent"], ["dialog", "agent"], ["page", "user"], ["dialog", "user"], ["page", "organization"], ["dialog", "organization"]] as const)("restores and renames a GitHub App on %s reconnect with %s ownership without requiring a new key", async (host, kind) => {
     const connectionId = "22222222-2222-4222-8222-222222222222";
     mockSearch.value = `source=github&reconnect=${connectionId}`;
     listGalleryMock.mockResolvedValue({ apps: [GITHUB_MANAGED] });
     listApplicationsMock.mockResolvedValue({ applications: [{ id: "app-github", metadata: { sourceTemplateKey: "github" } }] });
     const configValues = { version: "1", appId: "123456", installationId: "12345678", repositories: "example/repository", permissionProfile: "read" };
     listConnectionsMock.mockResolvedValue({ connections: [{
-      id: connectionId, applicationId: "app-github", name: "Old bot", status: "active", credentialPolicy: "per_agent", authKind: "api_key",
+      id: connectionId, applicationId: "app-github", name: "Old bot", status: "active", credentialPolicy: kind === "agent" ? "per_agent" : kind === "user" ? "per_user" : "shared", authKind: "api_key",
       config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation", methodConfig: configValues }, transportConfig: {},
     }] });
     listConnectionGrantsMock.mockResolvedValue({ grants: [
       { kind: "agent", status: "revoked", subjectAgentId: "former-agent", credentialSecretRefs: [] },
-      { kind: "agent", status: "active", subjectAgentId: "agent-1", credentialSecretRefs: [{ configPath: "credentials.privateKey" }] },
+      { kind, status: "active", subjectAgentId: kind === "agent" ? "agent-1" : null, subjectUserId: kind === "user" ? "board" : null, credentialSecretRefs: [{ configPath: "credentials.privateKey" }] },
     ] });
+    getConnectionInstallsMock.mockResolvedValue({ installs: kind === "organization"
+      ? [{ targetType: "company", targetId: "company-1" }]
+      : [{ targetType: "agent", targetId: "agent-1" }, ...(kind === "user" ? [{ targetType: "agent", targetId: "agent-2" }] : [])] });
     if (host === "page") listConnectionGrantsMock.mockRejectedValueOnce(new Error("temporary failure"));
     await render(undefined, false, <ConnectionSetupFlow host={host} serviceSlug="github" />);
     await flushReact();
     if (host === "page") {
       expect(buttonByText("Connect")?.disabled).toBe(true);
-      expect(container.textContent).toContain("Couldn’t load the assigned agent");
+      expect(container.textContent).toContain("Couldn’t load the saved connection ownership");
       await act(async () => buttonByText("Try again")!.click());
       await flushReact();
     }
@@ -440,7 +479,12 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     await act(async () => buttonByText("Connect")!.click());
     await flushReact();
     expect(connectAppMock).toHaveBeenCalledWith("company-1", expect.objectContaining({
-      name: "Review bot", reconnectConnectionId: connectionId, subjectAgentId: "agent-1", configValues, credentialValues: {},
+      name: "Review bot", reconnectConnectionId: connectionId, ...(kind === "agent" ? { subjectAgentId: "agent-1" } : {}), configValues, credentialValues: {},
+    }));
+    const submitted = connectAppMock.mock.calls[0]![1];
+    expect(submitted.grantKind ?? "organization").toBe(kind);
+    expect(finishAppMock).toHaveBeenCalledWith("company-1", "conn-1", expect.objectContaining({
+      access: kind === "organization" ? "all_agents" : { agentIds: kind === "agent" ? ["agent-1"] : ["agent-1", "agent-2"] },
     }));
   });
 
@@ -1716,6 +1760,8 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     expect(container.textContent).not.toContain("GitHub sign-in is unavailable");
     expect(buttonByText("Continue to GitHub")).toBeUndefined();
     expect(buttonByText("Connect")?.disabled).toBe(true);
+    await openAccessAdvanced();
+    await act(async () => radioContaining("A dedicated account for an agent")!.click());
     await act(async () => buttonContaining("Select agents")!.click());
     await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Allow Ada"]')!.click());
     await act(async () => {

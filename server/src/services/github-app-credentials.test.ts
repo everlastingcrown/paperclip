@@ -13,7 +13,7 @@ import { resolveGitHubAppCredential } from "./github-app-credentials.js";
 import { githubAppFailure } from "./github-app-client.js";
 
 function fixture() {
-  const connection = { id: "connection", companyId: "company", status: "active", enabled: true,
+  const connection = { id: "connection", companyId: "company", status: "active", enabled: true, credentialPolicy: "per_agent",
     config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation", methodConfig: {
       appId: "1", installationId: "2", repositories: "owner/repo", permissionProfile: "read",
     } } } as unknown as typeof toolConnections.$inferSelect;
@@ -32,6 +32,41 @@ function fixture() {
 }
 
 describe("GitHub App credential authorization", () => {
+  it.each(["user", "organization"] as const)("supports selected and all-agent installs for %s ownership", async kind => {
+    const { connection, grant, rows, db } = fixture();
+    connection.credentialPolicy = kind === "user" ? "per_user" : "shared";
+    grant.kind = kind;
+    grant.subjectAgentId = null;
+    grant.subjectUserId = kind === "user" ? "owner" : null;
+    rows.connection = structuredClone(connection);
+    rows.grant = structuredClone(grant);
+    rows.installs = [{ targetType: "agent", targetId: "agent-a" }, { targetType: "agent", targetId: "agent-b" }];
+    for (const agentId of ["agent-a", "agent-b"]) {
+      await expect(resolveGitHubAppCredential(db, connection, grant, false, false, agentId)).resolves.toMatchObject({ token: "short-lived-token" });
+    }
+    await expect(resolveGitHubAppCredential(db, connection, grant, false, false, "other-agent")).rejects.toThrow();
+    rows.installs = [{ targetType: "company", targetId: "company" }];
+    await expect(resolveGitHubAppCredential(db, connection, grant, false, false, "new-agent")).resolves.toMatchObject({ token: "short-lived-token" });
+  });
+
+  it.each(["owner", "policy", "kind", "install"])("rechecks %s during shared/personal acquisition", async change => {
+    const { connection, grant, rows, db } = fixture();
+    connection.credentialPolicy = "per_user";
+    grant.kind = "user";
+    grant.subjectAgentId = null;
+    grant.subjectUserId = "owner";
+    rows.connection = structuredClone(connection);
+    rows.grant = structuredClone(grant);
+    mocks.acquire.mockImplementationOnce(async () => {
+      if (change === "owner") rows.grant.subjectUserId = "another-owner";
+      if (change === "policy") rows.connection.credentialPolicy = "shared";
+      if (change === "kind") rows.grant.kind = "organization";
+      if (change === "install") rows.installs = [];
+      return { token: "short-lived-token", github: { userId: "123", login: "app[bot]" } };
+    });
+    await expect(resolveGitHubAppCredential(db, connection, grant, false, false, "agent")).rejects.toThrow();
+  });
+
   it("preserves safe provider diagnostics through vault-backed acquisition", async () => {
     const { connection, grant, db } = fixture();
     mocks.acquire.mockImplementationOnce(async () => githubAppFailure("permissions"));

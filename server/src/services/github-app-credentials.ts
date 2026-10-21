@@ -9,6 +9,14 @@ type Connection = typeof toolConnections.$inferSelect;
 type Grant = typeof connectionGrants.$inferSelect;
 const client = createGitHubAppClient();
 
+function matchesOwnership(connection: Connection, grant: Grant) {
+  return connection.credentialPolicy === "per_user"
+    ? grant.kind === "user" && Boolean(grant.subjectUserId)
+    : connection.credentialPolicy === "per_agent"
+      ? grant.kind === "agent" && Boolean(grant.subjectAgentId)
+      : grant.kind === "organization";
+}
+
 export async function getGitHubAppGrant(db: Db, connection: Connection): Promise<Grant> {
   const grants = await db.select().from(connectionGrants).where(and(
     eq(connectionGrants.companyId, connection.companyId),
@@ -16,23 +24,29 @@ export async function getGitHubAppGrant(db: Db, connection: Connection): Promise
     eq(connectionGrants.status, "active"),
   ));
   const grant = grants[0];
-  if (grants.length !== 1 || grant?.kind !== "agent" || !grant.subjectAgentId) {
-    throw unprocessable("Reconnect the dedicated GitHub App identity.");
+  if (grants.length !== 1 || !grant || !matchesOwnership(connection, grant)) {
+    throw unprocessable("Reconnect the GitHub App identity.");
   }
   return grant;
 }
 
 /** Authorization and vault ownership are rechecked even on a token-cache hit. */
-export async function resolveGitHubAppCredential(db: Db, connection: Connection, grant: Grant, allowDraft = false, force = false) {
+export async function resolveGitHubAppCredential(db: Db, connection: Connection, grant: Grant, allowDraft = false, force = false, agentId?: string | null) {
   const valid = async () => {
     const [c] = await db.select().from(toolConnections).where(and(eq(toolConnections.companyId, connection.companyId), eq(toolConnections.id, connection.id)));
     const [g] = await db.select().from(connectionGrants).where(and(eq(connectionGrants.companyId, connection.companyId), eq(connectionGrants.id, grant.id)));
-    if (!c || !g || !isGitHubAppConnection(c) || g.connectionId !== c.id || g.kind !== "agent" || !g.subjectAgentId
-      || g.subjectAgentId !== grant.subjectAgentId || g.status !== "active" || (allowDraft ? c.status !== "draft" : (!c.enabled || c.status !== "active"))
+    if (!c || !g || !isGitHubAppConnection(c) || g.connectionId !== c.id || !matchesOwnership(c, g) || g.kind !== grant.kind || g.subjectUserId !== grant.subjectUserId
+      || c.credentialPolicy !== connection.credentialPolicy || g.subjectAgentId !== grant.subjectAgentId || g.status !== "active" || (allowDraft ? c.status !== "draft" : (!c.enabled || c.status !== "active"))
       || JSON.stringify(c.config) !== JSON.stringify(connection.config) || JSON.stringify(g.credentialSecretRefs) !== JSON.stringify(grant.credentialSecretRefs)) githubAppFailure();
     if (!allowDraft) {
       const installs = await db.select().from(toolConnectionInstalls).where(and(eq(toolConnectionInstalls.companyId, c.companyId), eq(toolConnectionInstalls.connectionId, c.id)));
-      if (!installs.some(i => (i.targetType === "agent" && i.targetId === g.subjectAgentId) || (i.targetType === "company" && i.targetId === c.companyId))) githubAppFailure();
+      // Health checks have no run agent. Runtime acquisition checks the exact
+      // agent again after the provider request, including on cache hits.
+      const targetAgentId = agentId ?? (g.kind === "agent" ? g.subjectAgentId : null);
+      if (!installs.some(install =>
+        (install.targetType === "company" && install.targetId === c.companyId)
+        || (install.targetType === "agent" && (!targetAgentId || install.targetId === targetAgentId))
+      )) githubAppFailure();
     }
     return { c, g };
   };

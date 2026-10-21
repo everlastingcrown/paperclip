@@ -15818,7 +15818,7 @@ describeEmbeddedPostgres("tool access service", () => {
       const service = createTestToolAccessService(db);
       const application = await service.createApplication(company.id, { name: "GitHub", type: "rest_api" });
       const connection = await service.createConnection(company.id, {
-        applicationId: application.id, name: "GitHub App diagnostics", transport: "rest_api", status: "draft",
+        applicationId: application.id, name: "GitHub App diagnostics", transport: "rest_api", status: "draft", credentialPolicy: "per_agent",
         config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation", methodConfig: {
           version: "1", appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read",
         } },
@@ -15954,11 +15954,14 @@ describeEmbeddedPostgres("tool access service", () => {
     }
   });
 
-  it.each([undefined, "1", 1])("persists GitHub App version %s and replaces its key only after verification, surviving old-key revocation", async (version) => {
+  it.each(["agent", "user", "organization"] as const)("persists GitHub App %s ownership and replaces its key only after verification", async (kind) => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
     const service = createTestToolAccessService(db);
     const actor = { actorType: "user" as const, actorId: "board" };
+    await db.insert(companyMemberships).values({ companyId: company.id, principalType: "user", principalId: "board", membershipRole: "owner", status: "active" });
+    const secondAgent = await createAgent(db, company.id);
+    const access = kind === "agent" ? { agentIds: [agent.id] } : { agentIds: [agent.id, secondAgent.id] };
     const keyA = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const keyB = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const pem = (key: typeof keyA) => key.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
@@ -15990,17 +15993,17 @@ describeEmbeddedPostgres("tool access service", () => {
       return Response.json(bodies[path]);
     });
     const connected = await service.connectGalleryApp(company.id, {
-      galleryKey: "github", connectionMethodKey: "app-installation", grantKind: "agent", subjectAgentId: agent.id,
-      configValues: { ...(version === undefined ? {} : { version }), appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read" },
+      galleryKey: "github", connectionMethodKey: "app-installation", grantKind: kind, ...(kind === "agent" ? { subjectAgentId: agent.id } : {}),
+      configValues: { version: "1", appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read" },
       credentialValues: { "credentials.privateKey": pem(keyA) },
     }, actor);
     const stored = await service.getConnection(connected.connectionId, company.id);
     expect(stored.config.methodConfig).toMatchObject({ version: "1", repositories: "owner/repo", permissionProfile: "read" });
     await service.finishGalleryAppConnection(company.id, connected.connectionId, {
-      enabledCatalogEntryIds: [], askFirstCatalogEntryIds: [], access: { agentIds: [agent.id] },
+      enabledCatalogEntryIds: [], askFirstCatalogEntryIds: [], access,
     }, actor);
     await service.putConnectionInstalls(connected.connectionId, {
-      installs: [{ targetType: "agent", targetId: agent.id }],
+      installs: access.agentIds.map(targetId => ({ targetType: "agent" as const, targetId })),
     }, actor);
     const readGrant = async () => (await db.select().from(connectionGrants)
       .where(eq(connectionGrants.connectionId, connected.connectionId)))[0]!;
@@ -16033,19 +16036,63 @@ describeEmbeddedPostgres("tool access service", () => {
     expect(authenticatedKeys.every(key => key === "B")).toBe(true);
     const grant = await readGrant();
     expect(grant.id).toBe(originalGrant.id);
-    expect(grant.subjectAgentId).toBe(agent.id);
+    expect(grant.kind).toBe(kind);
+    expect(grant.subjectAgentId).toBe(kind === "agent" ? agent.id : null);
+    expect(grant.subjectUserId).toBe(kind === "user" ? "board" : null);
+    const [secret] = await db.select().from(companySecrets).where(eq(companySecrets.id, grant.credentialSecretRefs[0]!.secretId));
+    expect(secret).toMatchObject({ scope: kind === "user" ? "user" : "company", ownerUserId: kind === "user" ? "board" : null });
     expect(await versions()).toHaveLength(originalVersions.length + 1);
     const connection = await service.getConnection(connected.connectionId, company.id);
-    expect(connection.credentialSecretRefs).toEqual([]);
+    expect(connection.credentialSecretRefs).toEqual(kind === "organization" ? grant.credentialSecretRefs : []);
     expect(connection.credentialRefs).toEqual([]);
     const bindings = await db.select().from(companySecretBindings)
       .where(eq(companySecretBindings.targetId, connected.connectionId));
-    expect(bindings).toEqual([expect.objectContaining({
-      secretId: grant.credentialSecretRefs[0]!.secretId, configPath: "credentials.privateKey",
-    })]);
+    if (kind === "user") {
+      expect(bindings).toEqual([]);
+      const declarations = await db.select().from(userSecretDeclarations).where(eq(userSecretDeclarations.targetId, connected.connectionId));
+      expect(declarations).toEqual([expect.objectContaining({ userSecretDefinitionId: secret!.userSecretDefinitionId, configPath: "credentials.privateKey" })]);
+    } else {
+      expect(bindings).toEqual([expect.objectContaining({ secretId: grant.credentialSecretRefs[0]!.secretId, configPath: "credentials.privateKey" })]);
+    }
     await expect(reconnect("invalid PEM")).rejects.toMatchObject({ status: 422 });
     await expect(acquire()).resolves.toMatchObject({ token: "app-token" });
     expect(authenticatedKeys.at(-1)).toBe("B");
+    await db.insert(companyMemberships).values({ companyId: company.id, principalType: "user", principalId: "other-member", membershipRole: "member", status: "active" });
+    const ownerRepositories = await service.listGitHubRepositories(company.id, "board", false, { includeGitHubApps: true });
+    expect(ownerRepositories.repositories.map(repository => repository.fullName)).toEqual(["owner/repo"]);
+    const otherRepositories = await service.listGitHubRepositories(company.id, "other-member", false, { includeGitHubApps: true });
+    expect(otherRepositories.repositories.map(repository => repository.fullName)).toEqual(kind === "user" ? [] : ["owner/repo"]);
+    const { resolveManagedGitHubIdentitySelection, resolveManagedGitHubCredential } = await import("../services/git-credentials.js");
+    for (const agentId of access.agentIds) {
+      const resolved = await resolveManagedGitHubCredential(db, secretService(db), company.id, { agentId, responsibleUserId: "board" });
+      expect(resolved.credential).toMatchObject({ token: "app-token", connectionId: connected.connectionId });
+    }
+    if (kind === "user") {
+      expect((await resolveManagedGitHubIdentitySelection(db, company.id, { agentId: agent.id, responsibleUserId: "someone-else" })).grant).toBeUndefined();
+    }
+    if (kind === "organization") {
+      expect((await resolveManagedGitHubIdentitySelection(db, company.id, { agentId: agent.id, responsibleUserId: "non-member" })).grant).toBeUndefined();
+      await db.insert(connectionGrantMembers).values({ companyId: company.id, grantId: grant.id, subjectType: "user", subjectId: "board" });
+      expect((await resolveManagedGitHubIdentitySelection(db, company.id, { agentId: agent.id, responsibleUserId: "other-member" })).grant).toBeUndefined();
+      expect((await resolveManagedGitHubIdentitySelection(db, company.id, { agentId: agent.id, responsibleUserId: "board" })).grant?.id).toBe(grant.id);
+      expect((await service.listGitHubRepositories(company.id, "other-member", false, { includeGitHubApps: true })).repositories).toEqual([]);
+    }
+    if (kind !== "agent") {
+      await service.finishGalleryAppConnection(company.id, connected.connectionId, {
+        enabledCatalogEntryIds: [], askFirstCatalogEntryIds: [], access: "all_agents",
+      }, actor);
+      await service.putConnectionInstalls(connected.connectionId, {
+        installs: [{ targetType: "company", targetId: company.id }],
+      }, actor);
+      const installs = await db.select().from(toolConnectionInstalls).where(eq(toolConnectionInstalls.connectionId, connected.connectionId));
+      expect(installs).toEqual([expect.objectContaining({ targetType: "company", targetId: company.id })]);
+      const resumed = await service.connectGalleryApp(company.id, {
+        galleryKey: "github", connectionMethodKey: "app-installation", reconnectConnectionId: connected.connectionId,
+        grantKind: kind, credentialValues: {}, configValues: connection.config.methodConfig as Record<string, string>,
+      }, actor);
+      expect(resumed.connectionId).toBe(connected.connectionId);
+      expect(resumed.connection.credentialPolicy).toBe(kind === "user" ? "per_user" : "shared");
+    }
   });
 
   it("reconnects a gallery app by rotating the existing credential in place (PAP-10859)", async () => {

@@ -3,6 +3,7 @@ import {
   heartbeatRuns,
   companyMemberships,
   connectionGrantDelegations,
+  connectionGrantMembers,
   connectionGrants,
   toolConnectionInstalls,
   toolConnections,
@@ -344,7 +345,7 @@ export async function resolveManagedGitHubIdentitySelection(
   const grants = await db.select().from(connectionGrants).where(and(
     eq(connectionGrants.companyId, companyId),
     inArray(connectionGrants.connectionId, [...eligibleConnectionIds]),
-    or(eq(connectionGrants.kind, "agent"), eq(connectionGrants.kind, "user")),
+    or(eq(connectionGrants.kind, "agent"), eq(connectionGrants.kind, "user"), eq(connectionGrants.kind, "organization")),
   ));
   const dedicated = context.agentId
     ? grants.filter((grant) => grant.kind === "agent" && grant.subjectAgentId === context.agentId)
@@ -365,8 +366,26 @@ export async function resolveManagedGitHubIdentitySelection(
         return grants.filter((grant) => grant.kind === "user" && delegatedIds.has(grant.id));
       })
     : [];
-  const candidates = dedicated.length > 0 ? dedicated : personal.length > 0 ? personal : delegated;
-  const identitySource = dedicated.length > 0 ? "dedicated" as const : "personal" as const;
+  const sharedGrants = grants.filter(grant => grant.kind === "organization" && githubConnections.some(connection =>
+    connection.id === grant.connectionId && connection.credentialPolicy === "shared" && isGitHubAppConnection(connection)));
+  const [sharedAudience, responsibleMembership] = sharedGrants.length === 0 ? [[], []] : await Promise.all([
+    db.select().from(connectionGrantMembers).where(and(
+      eq(connectionGrantMembers.companyId, companyId),
+      inArray(connectionGrantMembers.grantId, sharedGrants.map(grant => grant.id)),
+      eq(connectionGrantMembers.subjectType, "user"),
+    )),
+    context.responsibleUserId ? db.select({ id: companyMemberships.id }).from(companyMemberships).where(and(
+      eq(companyMemberships.companyId, companyId), eq(companyMemberships.principalType, "user"),
+      eq(companyMemberships.principalId, context.responsibleUserId), eq(companyMemberships.status, "active"),
+    )).limit(1) : Promise.resolve([]),
+  ]);
+  const shared = sharedGrants.filter(grant => {
+    if (context.responsibleUserId && responsibleMembership.length === 0) return false;
+    const audience = sharedAudience.filter(member => member.grantId === grant.id);
+    return audience.length === 0 || audience.some(member => member.subjectId === context.responsibleUserId);
+  });
+  const candidates = dedicated.length > 0 ? dedicated : personal.length > 0 ? personal : delegated.length > 0 ? delegated : shared;
+  const identitySource = dedicated.length > 0 || candidates === shared ? "dedicated" as const : "personal" as const;
   // Reconnecting can create another connection/grant for the same GitHub
   // account. Ambiguity is about provider identities, not the number of rows.
   // Only trust GitHub's stable account ID; equal logins or missing metadata
@@ -498,11 +517,15 @@ export async function resolveManagedGitHubCredential(
     }
     const appConnection = selection.connection;
     if (appConnection && isGitHubAppConnection(appConnection)) {
-      const app = await resolveGitHubAppCredential(db, appConnection, grant);
-      return { configured: true, identitySource: "dedicated" as const, credential: {
+      const app = await resolveGitHubAppCredential(db, appConnection, grant, false, false, context.agentId);
+      if (grant.kind === "organization") {
+        const current = await resolveManagedGitHubIdentitySelection(db, companyId, context);
+        if (current.grant?.id !== grant.id) throw new Error("The shared GitHub App audience changed during acquisition");
+      }
+      return { configured: true, identitySource: selection.identitySource, credential: {
         token: app.token, source: "managed_connection" as const, secretName: null, refreshPerOperation: true,
         githubIdentity: { userId: app.github.userId, login: app.github.login },
-        identitySource: "dedicated" as const, connectionId: grant.connectionId, grantId: grant.id,
+        identitySource: selection.identitySource, connectionId: grant.connectionId, grantId: grant.id,
       } };
     }
     const expiresAt = grant.providerTenant?.oauth?.accessTokenExpiresAt;
