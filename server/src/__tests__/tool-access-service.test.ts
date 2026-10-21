@@ -15954,7 +15954,9 @@ describeEmbeddedPostgres("tool access service", () => {
     }
   });
 
-  it.each(["agent", "user", "organization"] as const)("persists GitHub App %s ownership and replaces its key only after verification", async (kind) => {
+  it.each((["agent", "user", "organization"] as const).flatMap(kind =>
+    (["read", "custom"] as const).map(permissionProfile => ({ kind, permissionProfile })),
+  ))("persists GitHub App $kind ownership with $permissionProfile permissions and replaces its key only after verification", async ({ kind, permissionProfile }) => {
     const company = await createCompany(db);
     const agent = await createAgent(db, company.id);
     const service = createTestToolAccessService(db);
@@ -15992,13 +15994,26 @@ describeEmbeddedPostgres("tool access service", () => {
       if (!bodies[path]) throw new Error(`Unexpected GitHub request: ${path}`);
       return Response.json(bodies[path]);
     });
+    const configValues = { version: "1", appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile,
+      ...(permissionProfile === "custom" ? { customPermissions: '{"pull_requests":"read","contents":"read"}' } : {}),
+    };
     const connected = await service.connectGalleryApp(company.id, {
       galleryKey: "github", connectionMethodKey: "app-installation", grantKind: kind, ...(kind === "agent" ? { subjectAgentId: agent.id } : {}),
-      configValues: { version: "1", appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read" },
+      configValues,
       credentialValues: { "credentials.privateKey": pem(keyA) },
     }, actor);
     const stored = await service.getConnection(connected.connectionId, company.id);
-    expect(stored.config.methodConfig).toMatchObject({ version: "1", repositories: "owner/repo", permissionProfile: "read" });
+    expect(stored.config.methodConfig).toEqual(configValues);
+    if (permissionProfile === "custom") {
+      await expect(service.connectGalleryApp(company.id, {
+        galleryKey: "github", connectionMethodKey: "app-installation", grantKind: kind, ...(kind === "agent" ? { subjectAgentId: agent.id } : {}), resumeConnectionId: connected.connectionId,
+        configValues: { ...configValues, customPermissions: '{ "contents": "read", "pull_requests": "read" }' }, credentialValues: {},
+      }, actor)).resolves.toHaveProperty("connectionId", connected.connectionId);
+      await expect(service.connectGalleryApp(company.id, {
+        galleryKey: "github", connectionMethodKey: "app-installation", grantKind: kind, ...(kind === "agent" ? { subjectAgentId: agent.id } : {}), resumeConnectionId: connected.connectionId,
+        configValues: { ...configValues, customPermissions: '{"contents":"write"}' }, credentialValues: {},
+      }, actor)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("Reconnect preserves the App") });
+    }
     await service.finishGalleryAppConnection(company.id, connected.connectionId, {
       enabledCatalogEntryIds: [], askFirstCatalogEntryIds: [], access,
     }, actor);
@@ -18803,6 +18818,10 @@ describe("projectedConnectionHeaders", () => {
 describe("normalizeConnectionMethodConfig", () => {
   const githubAppMethod = getConnectableAppDefinition("github")!.methods.find(method => method.key === "app-installation")!;
   const appConfig = { appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read" };
+  it("persists custom GitHub permission settings alongside the templates", () => {
+    const values = { ...appConfig, permissionProfile: "custom", customPermissions: '{"contents":"read","checks":"write"}' };
+    expect(normalizeConnectionMethodConfig(githubAppMethod, values).values).toEqual({ ...values, version: "1" });
+  });
   it.each([undefined, "1", 1])("normalizes GitHub App version %s for persistence", version => {
     expect(normalizeConnectionMethodConfig(githubAppMethod, { ...appConfig, ...(version === undefined ? {} : { version }) }).values)
       .toEqual({ ...appConfig, version: "1" });

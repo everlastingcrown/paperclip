@@ -56,6 +56,62 @@ describe("customer-owned GitHub App protocol", () => {
   it.each(["toString", "admin", "__proto__"])("rejects an unknown permission profile %s", permissionProfile => {
     expect(() => parseGitHubAppConfig({ ...base, permissionProfile })).toThrow();
   });
+  it.each(["read", "author", "reviewer"])("keeps the %s template independent of custom input", permissionProfile => {
+    expect(parseGitHubAppConfig({ ...base, permissionProfile, customPermissions: "invalid JSON" }))
+      .toEqual(parseGitHubAppConfig({ ...base, permissionProfile }));
+  });
+
+  it("normalizes custom permissions without adding template grants", () => {
+    const custom = parseGitHubAppConfig({ ...base, permissionProfile: "custom", customPermissions: '{"workflows":"write", "contents":"read"}' });
+    expect(custom.permissions).toEqual({ contents: "read", workflows: "write" });
+    expect(JSON.stringify(custom)).toBe(JSON.stringify(parseGitHubAppConfig({
+      ...base, permissionProfile: "custom", customPermissions: '{ "contents": "read", "workflows": "write" }',
+    })));
+  });
+
+  it.each([
+    undefined, null, true, {}, "", "{", "null", "[]", "{}", '"read"',
+    '{"contents":"none"}', '{"contents":true}', '{"contents":{"read":true}}',
+    '{"Contents":"read"}', '{"__proto__":"write"}', '{"contents-write":"read"}',
+    JSON.stringify(Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`permission_${i}`, "read"]))),
+    " ".repeat(10_001),
+  ])("rejects malformed or empty custom permissions %#", customPermissions => {
+    expect(() => parseGitHubAppConfig({ ...base, permissionProfile: "custom", customPermissions }))
+      .toThrow(expect.objectContaining({ details: { code: "github_app_access_unavailable", reason: "custom_permissions" } }));
+  });
+
+  it("mints exactly the custom permissions and separates changed scopes in the cache", async () => {
+    const { client, fetcher } = fixture({ "/app/installations/456": {
+      id: 456, app_id: 123, account: { login: "owner" }, permissions: { contents: "write", checks: "write", workflows: "write" },
+    } });
+    const custom = (customPermissions: string) => parseGitHubAppConfig({ ...base, permissionProfile: "custom", customPermissions });
+    await client.acquire("scope", custom('{"checks":"write","contents":"read"}'), privateKey);
+    await client.acquire("scope", custom('{ "contents": "read", "checks": "write" }'), privateKey);
+    expect(fetcher).toHaveBeenCalledTimes(5);
+    await client.acquire("scope", custom('{"contents":"read","workflows":"write"}'), privateKey);
+    const minted = fetcher.mock.calls.filter(([url]) => String(url).endsWith("/access_tokens"));
+    expect(minted.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
+      { repositories: ["repo"], permissions: { checks: "write", contents: "read" } },
+      { repositories: ["repo"], permissions: { contents: "read", workflows: "write" } },
+    ]);
+  });
+
+  it.each([
+    ["read", "write", true], ["write", "read", false], ["admin", "write", false],
+    ["admin", "admin", true], ["write", "admin", true], ["read", undefined, false],
+    ["read", "unknown", false],
+  ])("checks custom level %s against installation level %s", async (requested, granted, accepted) => {
+    const { client, fetcher } = fixture({ "/app/installations/456": {
+      id: 456, app_id: 123, account: { login: "owner" }, permissions: granted ? { checks: granted } : {},
+    } });
+    const scope = parseGitHubAppConfig({ ...base, permissionProfile: "custom", customPermissions: JSON.stringify({ checks: requested }) });
+    if (accepted) await expect(client.acquire("scope", scope, privateKey)).resolves.toHaveProperty("token");
+    else {
+      await expect(client.acquire("scope", scope, privateKey)).rejects.toMatchObject({ details: { reason: "permissions" } });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    }
+  });
+
   it.each([undefined, "1", 1])("accepts raw GitHub App version %s", version => {
     expect(parseGitHubAppConfig({ ...base, ...(version === undefined ? {} : { version }) }).version).toBe(1);
   });

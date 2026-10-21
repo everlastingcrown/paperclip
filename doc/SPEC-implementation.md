@@ -229,6 +229,11 @@ credential access. Legacy workspace URLs remain valid. Project creation and
 repository replacement are transactional.
 See `doc/project-repositories.md` for the API and UI contract.
 
+Customer-owned GitHub App credentials accept Read, Author, and Reviewer permission
+templates or an explicit custom JSON permission map. Custom permissions replace
+the template and must be granted by the installation. Token requests restrict
+repositories and permissions explicitly. Reconnect preserves the saved scope.
+
 ## 7.6 `issues` (core task entity)
 
 Task creation accepts an omitted or blank title when the description contains a prompt.

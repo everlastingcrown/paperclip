@@ -3613,10 +3613,14 @@ function KeyStep({
     ? oauthCallbackUrlForBrowser()
     : null;
   const allConfigFields = [...(method?.tenantFields ?? []), ...(method?.extensionFields ?? [])];
-  const configFields = allConfigFields.filter((field) => !field.hidden);
+  const githubAppMethod = entry.slug === "github" && method?.key === "app-installation";
+  const visibleConfigFields = allConfigFields.filter((field) =>
+    !githubAppMethod || field.key !== "customPermissions" || configValues.permissionProfile === "custom",
+  ).map((field) => githubAppMethod && field.key === "customPermissions" ? { ...field, required: true } : field);
+  const configFields = visibleConfigFields.filter((field) => !field.hidden);
   const standardConfigFields = configFields.filter((field) => field.advanced !== true);
   const advancedConfigFields = configFields.filter((field) => field.advanced === true);
-  const configFilled = allConfigFields.every((field) => {
+  const configFilled = visibleConfigFields.every((field) => {
     if (!field.required) return true;
     const value = configValues[field.key];
     return typeof value === "boolean" || (typeof value === "string" && value.trim().length > 0);
@@ -4088,6 +4092,7 @@ function MethodConfigField({
       <label className="text-sm font-medium text-foreground">{field.label}</label>
       {field.type === "textarea" ? (
         <Textarea
+          aria-label={field.label}
           value={typeof value === "string" ? value : ""}
           onChange={(event) => onChange(event.target.value)}
           placeholder={field.placeholder}
@@ -4095,6 +4100,7 @@ function MethodConfigField({
         />
       ) : field.type === "select" ? (
         <select
+          aria-label={field.label}
           value={typeof value === "string" ? value : ""}
           onChange={(event) => onChange(event.target.value)}
           className="mt-2 h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"

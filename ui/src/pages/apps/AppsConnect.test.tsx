@@ -446,12 +446,46 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     }));
   });
 
-  it.each([["page", "agent"], ["dialog", "agent"], ["page", "user"], ["dialog", "user"], ["page", "organization"], ["dialog", "organization"]] as const)("restores and renames a GitHub App on %s reconnect with %s ownership without requiring a new key", async (host, kind) => {
+  it.each(["page", "dialog"] as const)("connects custom GitHub permissions on %s and preserves template selection", async host => {
+    mockSearch.value = "source=github&method=app-installation";
+    listGalleryMock.mockResolvedValue({ apps: [GITHUB_MANAGED] });
+    await render(undefined, false, <ConnectionSetupFlow host={host} serviceSlug="github" />);
+    await act(async () => {
+      setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
+      setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[autocomplete="off"]')!, "fixture-pem");
+    });
+    expect(buttonByText("Connect")?.disabled).toBe(false);
+    expect(container.querySelector('[aria-label="Custom permissions (JSON)"]')).toBeNull();
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Permissions"]')!;
+    const choose = async (value: string) => act(async () => {
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await choose("custom");
+    expect(buttonByText("Connect")?.disabled).toBe(true);
+    const customPermissions = '{"contents":"read","checks":"write"}';
+    await act(async () => setTextareaValue(container.querySelector<HTMLTextAreaElement>('[aria-label="Custom permissions (JSON)"]')!, customPermissions));
+    expect(buttonByText("Connect")?.disabled).toBe(false);
+    await choose("reviewer");
+    expect(container.querySelector('[aria-label="Custom permissions (JSON)"]')).toBeNull();
+    expect(buttonByText("Connect")?.disabled).toBe(false);
+    await choose("custom");
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="Custom permissions (JSON)"]')?.value).toBe(customPermissions);
+    await act(async () => buttonByText("Connect")!.click());
+    await flushReact();
+    expect(connectAppMock).toHaveBeenCalledWith("company-1", expect.objectContaining({
+      connectionMethodKey: "app-installation", configValues: expect.objectContaining({ permissionProfile: "custom", customPermissions }),
+    }));
+  });
+
+  it.each([["page", "agent", "read"], ["dialog", "agent", "read"], ["page", "user", "read"], ["dialog", "user", "read"], ["page", "organization", "read"], ["dialog", "organization", "read"], ["page", "user", "custom"], ["dialog", "organization", "custom"]] as const)("restores and renames a GitHub App on %s reconnect with %s ownership and %s permissions without requiring a new key", async (host, kind, permissionProfile) => {
     const connectionId = "22222222-2222-4222-8222-222222222222";
     mockSearch.value = `source=github&reconnect=${connectionId}`;
     listGalleryMock.mockResolvedValue({ apps: [GITHUB_MANAGED] });
     listApplicationsMock.mockResolvedValue({ applications: [{ id: "app-github", metadata: { sourceTemplateKey: "github" } }] });
-    const configValues = { version: "1", appId: "123456", installationId: "12345678", repositories: "example/repository", permissionProfile: "read" };
+    const configValues = { version: "1", appId: "123456", installationId: "12345678", repositories: "example/repository", permissionProfile, ...(permissionProfile === "custom" ? { customPermissions: '{"contents":"read","checks":"write"}' } : {}) };
     listConnectionsMock.mockResolvedValue({ connections: [{
       id: connectionId, applicationId: "app-github", name: "Old bot", status: "active", credentialPolicy: kind === "agent" ? "per_agent" : kind === "user" ? "per_user" : "shared", authKind: "api_key",
       config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation", methodConfig: configValues }, transportConfig: {},
@@ -475,6 +509,11 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     expect(container.querySelector<HTMLInputElement>('#connection-name')?.value).toBe("Old bot");
     expect(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')?.matches(":disabled")).toBe(true);
     expect(buttonByText("Connect")?.disabled).toBe(false);
+    if (permissionProfile === "custom") {
+      const custom = container.querySelector<HTMLTextAreaElement>('[aria-label="Custom permissions (JSON)"]')!;
+      expect(custom.value).toBe(configValues.customPermissions);
+      expect(custom.matches(":disabled")).toBe(true);
+    }
     await act(async () => setInputValue(container.querySelector<HTMLInputElement>('#connection-name')!, "Review bot"));
     await act(async () => buttonByText("Connect")!.click());
     await flushReact();

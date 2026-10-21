@@ -12,8 +12,8 @@ tool executor. Existing managed OAuth and PAT methods remain available.
 1. Register an App in [GitHub settings](https://github.com/settings/apps/new).
    Install it on the selected repositories. Webhooks and OAuth callbacks are not
    required for this method.
-2. Grant the App the permissions required by the profile below. Generate an RSA
-   private key. Keep the App ID and installation ID (the number in the
+2. Grant the App the permissions required by a template below or your custom
+   selection. Generate an RSA private key. Keep the App ID and installation ID (the number in the
    installation settings URL).
 3. Open GitHub setup in Paperclip. If Paperclip enrollment or managed sign-in is
    unavailable, select **Connect to GitHub App** directly. Otherwise, under the
@@ -26,7 +26,8 @@ tool executor. Existing managed OAuth and PAT methods remain available.
    into the masked multiline private-key field. Use **Show private key** only when
    you need to inspect it. Connecting automatically stores the key as an encrypted
    secret in the vault; no plaintext storage option is offered. Choose a permission
-   profile and connect. On reconnect, leave the key blank to reuse the saved secret.
+   template or **Custom permissions** and connect. On reconnect, leave the key
+   blank to reuse the saved secret.
 5. Paperclip verifies the App, installation, bot account, and repository access.
    Finish setup for the selected agent access. Failed verification leaves no working
    connection and cleans up the new credential using the normal setup rollback.
@@ -41,7 +42,25 @@ All repositories must belong to the selected installation's account. The list
 must contain 1–500 repositories. An empty list is denied. Paperclip sends explicit
 repository and permission restrictions on every token request and never retries
 with broader access. GitHub also enforces the installation's current access.
-Administration and workflow permissions are not requested.
+The templates do not request administration or workflow permissions.
+
+Choose **Custom permissions** to enter a non-empty JSON object in **Custom
+permissions (JSON)**. Use GitHub API permission names and `read`, `write`, or
+`admin` levels, for example:
+
+```json
+{"contents":"read","pull_requests":"write","checks":"write"}
+```
+
+The custom map replaces the template; Paperclip does not add Contents, Pull
+requests, or Issues grants. Choose the permissions needed for your Git/gh work.
+GitHub implicitly includes repository metadata read access. Custom permissions
+may include `workflows` or `administration` when explicitly selected and granted
+by the installation. GitHub validates the supported names and levels; Paperclip
+rejects malformed or empty maps and insufficient installation grants before
+requesting a token. The map supports at most 100 entries and 10,000 characters.
+Switching back to a template ignores the custom input. Custom scope stays fixed
+on reconnect, just like a template; create a new connection to change it.
 
 GitHub accepts either the numeric App ID or the Client ID as the JWT issuer.
 Paperclip verifies the returned App identity and binds the installation to its
@@ -57,7 +76,7 @@ failures return HTTP 422; network failures return HTTP 502.
 Fresh setup can reuse an archived GitHub OAuth or PAT connection with the same
 name. Its old settings are not a GitHub App policy and must not be validated as
 one. Existing GitHub App connections still preserve their App, installation,
-repositories, and permission profile on resume or reconnect.
+repositories, and permission template or custom map on resume or reconnect.
 
 The verified `app-slug[bot]` identity appears on the connection. Personal
 connections use a user-owned key and are available when that owner is responsible

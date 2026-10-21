@@ -13,20 +13,36 @@ export type GitHubAppConfig = {
   appId: string;
   installationId: string;
   repositories: string[];
-  permissions: Record<string, "read" | "write">;
+  permissions: Record<string, "read" | "write" | "admin">;
 };
 const profiles = {
   read: { contents: "read", pull_requests: "read", issues: "read" },
   author: { contents: "write", pull_requests: "write", issues: "read" },
   reviewer: { contents: "read", pull_requests: "write", issues: "read" },
 } as const;
+const permissionLevels = { read: 1, write: 2, admin: 3 } as const;
+const customPermissionsSchema = z.record(
+  z.string().regex(/^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/),
+  z.enum(["read", "write", "admin"]),
+).refine(permissions => Object.keys(permissions).length > 0 && Object.keys(permissions).length <= 100);
+
+function parseCustomPermissions(value: unknown): GitHubAppConfig["permissions"] {
+  if (typeof value !== "string" || value.length > 10_000) githubAppFailure("custom_permissions");
+  let decoded: unknown;
+  try { decoded = JSON.parse(value); } catch { githubAppFailure("custom_permissions"); }
+  const parsed = customPermissionsSchema.safeParse(decoded);
+  if (!parsed.success) githubAppFailure("custom_permissions");
+  // Stable ordering keeps cache keys and reconnect comparisons independent of JSON formatting.
+  return Object.fromEntries(Object.entries(parsed.data).sort(([a], [b]) => a.localeCompare(b)));
+}
 const failureReasons = {
-  configuration: "Check the App ID or Client ID, numeric installation ID, repository names, and permission profile.",
+  configuration: "Check the App ID or Client ID, numeric installation ID, repository names, and permission template or custom permissions.",
+  custom_permissions: 'Custom permissions must be a non-empty JSON object of GitHub permission names and "read", "write", or "admin" levels (at most 100 entries).',
   private_key: "The private key could not be read as an RSA PEM. Paste the complete key with its header, footer, and line breaks.",
   app_authentication: "GitHub could not authenticate the App. Check the App ID or Client ID, matching private key, and container clock.",
   app_identity: "GitHub returned a different App identity. Check the App ID or Client ID.",
   installation: "GitHub could not verify this installation for the App. Check the installation ID and that the installation is active.",
-  permissions: "The installation lacks required permissions. All profiles require Contents, Pull requests, and Issues read access; Author also requires Contents and Pull requests write, and Reviewer requires Pull requests write. Approve any updated permissions in GitHub installation settings.",
+  permissions: "The installation lacks the selected permissions. Check the permission template or custom permissions and approve any updated permissions in GitHub installation settings.",
   token: "GitHub could not issue a restricted installation token. Check that every selected repository belongs to this installation and the requested permissions are granted.",
   bot_identity: "GitHub could not verify the App's bot account.",
   repositories: "GitHub could not verify the selected repositories. Use owner/repository names and grant the installation access to each one.",
@@ -62,11 +78,11 @@ export function isGitHubAppConnection(connection: { config: Record<string, unkno
 export function parseGitHubAppConfig(value: unknown): GitHubAppConfig {
   const v = value as Record<string, unknown> | null;
   if (!v || (v.version !== undefined && v.version !== "1" && v.version !== 1) || !/^(?:[1-9]\d*|Iv[0-9][A-Za-z0-9.]{1,97})$/.test(String(v.appId ?? "")) || !/^[1-9]\d*$/.test(String(v.installationId ?? ""))
-    || typeof v.repositories !== "string" || !Object.hasOwn(profiles, String(v.permissionProfile))) githubAppFailure("configuration");
+    || typeof v.repositories !== "string" || (v.permissionProfile !== "custom" && !Object.hasOwn(profiles, String(v.permissionProfile)))) githubAppFailure("configuration");
   const repositories = [...new Set(v.repositories.split(/[,\n]/).map(s => s.trim().toLowerCase()).filter(Boolean))].sort();
   if (!repositories.length || repositories.length > 500 || repositories.some(r => !/^[a-z0-9][a-z0-9-]*\/[a-z0-9_.-]+$/.test(r))) githubAppFailure("configuration");
   return { version: 1, appId: String(v.appId), installationId: String(v.installationId), repositories,
-    permissions: { ...profiles[v.permissionProfile as keyof typeof profiles] } };
+    permissions: v.permissionProfile === "custom" ? parseCustomPermissions(v.customPermissions) : { ...profiles[v.permissionProfile as keyof typeof profiles] } };
 }
 export function githubAppJwt(appId: string, privateKey: string, now = Date.now()) {
   const key = createPrivateKey(privateKey);
@@ -127,7 +143,8 @@ export function createGitHubAppClient(fetcher: typeof fetch = fetch, clock = Dat
     if (config.repositories.some(repo => repo.split("/")[0] !== owner)) githubAppFailure("repositories");
     for (const [name, level] of Object.entries(config.permissions)) {
       const allowed = installation.permissions?.[name];
-      if (allowed !== "write" && allowed !== level) githubAppFailure("permissions");
+      if (!Object.hasOwn(permissionLevels, allowed ?? "")
+        || permissionLevels[allowed as keyof typeof permissionLevels] < permissionLevels[level]) githubAppFailure("permissions");
     }
     const minted = await request(`/app/installations/${config.installationId}/access_tokens`, jwt, "token", tokenSchema, {
       repositories: config.repositories.map(repo => repo.split("/")[1]), permissions: config.permissions,
