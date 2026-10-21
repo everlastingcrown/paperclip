@@ -1447,6 +1447,7 @@ function StandardConnectionSetupFlow({
       return result;
     },
     onSuccess: (result) => {
+      setCredentials({});
       if (result.auth?.kind === "oauth") {
         setConnectResult(result);
         // The mutation saves the Access selection before this callback opens

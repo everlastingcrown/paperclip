@@ -23,7 +23,10 @@ tool executor. Existing managed OAuth and PAT methods remain available.
    or allow all agents. Dedicated ownership remains available for one agent.
 4. Enter the App ID or Client ID, installation ID, and explicit `owner/repository` list.
    Paste the complete PEM key, including its header, footer, and line breaks,
-   into the multiline private-key field. Choose a permission profile and connect.
+   into the masked multiline private-key field. Use **Show private key** only when
+   you need to inspect it. Connecting automatically stores the key as an encrypted
+   secret in the vault; no plaintext storage option is offered. Choose a permission
+   profile and connect. On reconnect, leave the key blank to reuse the saved secret.
 5. Paperclip verifies the App, installation, bot account, and repository access.
    Finish setup for the selected agent access. Failed verification leaves no working
    connection and cleans up the new credential using the normal setup rollback.

@@ -3408,3 +3408,8 @@ span.paperclip-mention-chip[data-mention-kind="external-object"] {
 @media (max-height: 420px) {
   .agent-setup-popover { overflow-y: auto; }
 }
+
+/* Keep PEM line breaks intact while concealing private key input by default. */
+.secret-textarea {
+  -webkit-text-security: disc;
+}

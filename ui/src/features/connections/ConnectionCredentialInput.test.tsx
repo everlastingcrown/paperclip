@@ -46,6 +46,22 @@ describe("shared setup and reconnect credential input", () => {
     expect(createPrivateKey(container.querySelector("output")!.textContent!).asymmetricKeyType).toBe("rsa");
   });
 
+  it("masks PEMs by default, reveals only on request, and explains secret storage", () => {
+    const container = render("credentials.privateKey");
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.classList.contains("secret-textarea")).toBe(true);
+    expect(textarea.autocomplete).toBe("off");
+    expect(textarea.getAttribute("spellcheck")).toBe("false");
+    const button = container.querySelector("button")!;
+    expect(button.type).toBe("button");
+    act(() => button.click());
+    expect(textarea.classList.contains("secret-textarea")).toBe(false);
+    expect(button.textContent).toBe("Hide private key");
+    act(() => button.click());
+    expect(textarea.classList.contains("secret-textarea")).toBe(true);
+    expect(container.textContent).toContain("automatically stores this key as an encrypted secret");
+  });
+
   it("keeps other credentials masked", () => {
     const container = render("credentials.token");
     expect(container.querySelector("input")!.type).toBe("password");
