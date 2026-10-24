@@ -1,11 +1,12 @@
 # Customer-owned GitHub App credentials
 
 Use **GitHub → Customer-owned GitHub App** to give selected agents or all agents
-an App's bot identity for managed Git, `gh`, and server-side repository checkout/fetch. Both public and
-private GitHub.com App registrations use installation access tokens. This method
-has no MCP tools and does not use GitHub's hosted MCP endpoint. The REST transport
-is implemented by the GitHub repository credential adapter, not a generic REST
-tool executor. Existing managed OAuth and PAT methods remain available.
+an App's bot identity for GitHub MCP tools, managed Git, `gh`, and server-side
+repository checkout/fetch. Both public and private GitHub.com App registrations
+use installation access tokens. MCP discovery and invocation use GitHub's hosted
+endpoint, `https://api.githubcopilot.com/mcp/`, through the existing governed
+remote MCP gateway. Paperclip exchanges the vaulted PEM for a scoped bearer token;
+the PEM is never sent to MCP. Existing managed OAuth and PAT methods remain available.
 
 ## Setup
 
@@ -151,8 +152,44 @@ Live acceptance remains required on a disposable repository: App A fetches,
 pushes, and opens a PR; App B fetches its diff and submits an approval. Verify bot
 attribution, denied repositories, rotation, renewal, and revoked assignment.
 An approval does not prove branch protection or CODEOWNERS requirements are met.
-GitHub Enterprise Server, automatic App creation, webhooks, and hosted MCP
-installation-token authentication are outside this method.
+GitHub Enterprise Server, automatic App creation, and webhooks are outside this method.
+
+## MCP actions and saved connections
+
+New connections discover repository, issue, pull-request, and Actions tools through
+the same catalog, agent profiles, action approvals, quarantine, and audit path as
+managed OAuth and PAT connections. The Read/Author/Reviewer template or custom
+permission map remains the token's authority; discovering a tool never grants a
+missing GitHub permission. GitHub does not filter installation-token catalogs by
+permissions, so a listed action can still be rejected by GitHub.
+
+Paperclip requests `X-MCP-Toolsets: default,actions` and excludes `get_me`, which
+requires a user token. Initialization instructions from MCP are not injected as
+trusted agent guidance. Tools requiring a signed-in human account are not a bot
+capability. Neither an authentication failure nor an unavailable App falls back
+to another App, a personal token, or OAuth consent. A run discovers tools for the
+same selected GitHub identity it uses at invocation.
+
+Existing App connections saved with the REST transport remain supported without
+a schema migration or key replacement. Use **Refresh actions**, then review and
+enable the discovered tools on Permissions. Newly discovered or changed tools on
+active App connections are quarantined for review; refresh preserves existing
+action policies. The old REST URL is never used as an MCP destination.
+
+Token acquisition rechecks local authority even on a cache hit. Invocation checks
+the selected identity and human audience again after acquisition. Expired tokens
+are renewed through the existing scoped token broker. Catalog discovery may
+retry a rejected token once; state-changing calls are not automatically replayed.
+
+Provider references:
+[remote MCP authentication and governance](https://github.com/github/github-mcp-server/blob/main/docs/policies-and-governance.md#2-remote-github-mcp-server)
+and [toolset configuration](https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md).
+
+The deterministic MCP fixtures prove Paperclip's transport and governance behavior,
+not live provider acceptance. Live qualification must additionally discover the
+catalog and execute an allowed read and write through a real run gateway, verify
+App bot attribution, test Ask first, deny another repository/agent, and verify
+rotation, renewal, and revocation.
 
 ## Connection names and removal
 

@@ -15918,7 +15918,11 @@ describeEmbeddedPostgres("tool access service", () => {
     }).returning();
     const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
       .export({ type: "pkcs8", format: "pem" }).toString();
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url) === "https://api.githubcopilot.com/mcp/") {
+        const rpc = JSON.parse(String(init?.body));
+        return Response.json({ jsonrpc: "2.0", id: rpc.id, result: { tools: [] } });
+      }
       const path = String(url).replace("https://api.github.com", "");
       const bodies: Record<string, unknown> = {
         "/app": { id: 123, client_id: "Iv23testclient", slug: "test-app" },
@@ -15946,7 +15950,7 @@ describeEmbeddedPostgres("tool access service", () => {
       expect(connected.connectionId).toBe(previous!.id);
     }
     expect(await service.getConnection(connected.connectionId, company.id)).toMatchObject({
-      transport: "rest_api", config: { connectionMethodKey: "app-installation", methodConfig: input.configValues },
+      transport: "mcp_remote", config: { connectionMethodKey: "app-installation", methodConfig: input.configValues },
     });
     const renamed = await service.connectGalleryApp(company.id, {
       ...input, credentialValues: {}, name: "Review bot", resumeConnectionId: connected.connectionId,
@@ -15997,6 +16001,10 @@ describeEmbeddedPostgres("tool access service", () => {
     let rejectB = false;
     const authenticatedKeys: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url) === "https://api.githubcopilot.com/mcp/") {
+        const rpc = JSON.parse(String(init?.body));
+        return Response.json({ jsonrpc: "2.0", id: rpc.id, result: { tools: [] } });
+      }
       const path = String(url).replace("https://api.github.com", "");
       if (path === "/app") {
         const jwt = String((init?.headers as Record<string, string>).Authorization).replace("Bearer ", "");
@@ -16134,6 +16142,155 @@ describeEmbeddedPostgres("tool access service", () => {
       expect(resumed.connectionId).toBe(connected.connectionId);
       expect(resumed.connection.credentialPolicy).toBe(kind === "user" ? "per_user" : "shared");
     }
+  });
+
+
+  it.each((["agent", "user", "organization"] as const).flatMap(kind =>
+    [false, true].map(legacy => ({ kind, legacy })),
+  ))("serves governed GitHub App MCP tools for $kind ownership (legacy REST: $legacy)", async ({ kind, legacy }) => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const actor = { actorType: "user" as const, actorId: "board" };
+    await db.insert(companyMemberships).values({
+      companyId: company.id, principalType: "user", principalId: "board", membershipRole: "owner", status: "active",
+    });
+    const service = createTestToolAccessService(db);
+    const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
+      .export({ type: "pkcs8", format: "pem" }).toString();
+    let tokenRevision = 0;
+    let rejectMcp = false;
+    let catalogEnabled = !legacy;
+    const calls: string[] = [];
+    const tools = [
+      { name: "get_me", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } },
+      { name: "get_file_contents", inputSchema: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" } } }, annotations: { readOnlyHint: true } },
+      { name: "create_pull_request", inputSchema: { type: "object", properties: { owner: { type: "string" }, repo: { type: "string" } } }, annotations: { readOnlyHint: false, destructiveHint: false } },
+    ];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url) === "https://api.githubcopilot.com/mcp/") {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("Authorization")).toBe("Bearer app-token-" + tokenRevision);
+        expect(headers.get("X-MCP-Toolsets")).toBe("default,actions");
+        expect(headers.get("X-MCP-Exclude-Tools")).toBe("get_me");
+        expect(JSON.stringify(init)).not.toContain("PRIVATE KEY");
+        if (rejectMcp) return Response.json({ message: "sensitive MCP failure" }, {
+          status: 401, headers: { "www-authenticate": 'Bearer resource_metadata="https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/"' },
+        });
+        const rpc = JSON.parse(String(init?.body));
+        if (rpc.method === "tools/call") calls.push(rpc.params.name);
+        return Response.json({ jsonrpc: "2.0", id: rpc.id, result: rpc.method === "tools/list"
+          ? { tools: catalogEnabled ? tools : [] } : { content: [{ type: "text", text: "fixture result" }] } });
+      }
+      const endpoint = String(url).replace("https://api.github.com", "");
+      if (endpoint === "/app/installations/456/access_tokens") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          repositories: ["repo"], permissions: { contents: "write", pull_requests: "write", issues: "read" },
+        });
+        tokenRevision++;
+        return Response.json({ token: "app-token-" + tokenRevision, expires_at: new Date(Date.now() + 3_600_000).toISOString() });
+      }
+      const bodies: Record<string, unknown> = {
+        "/app": { id: 123, slug: "test-app" },
+        "/app/installations/456": { id: 456, app_id: 123, account: { login: "owner" }, permissions: { contents: "write", pull_requests: "write", issues: "read" } },
+        "/users/test-app%5Bbot%5D": { id: 789, login: "test-app[bot]", type: "Bot" },
+        "/installation/repositories?per_page=100&page=1": { repositories: [{ id: 321, full_name: "owner/repo", private: true }] },
+      };
+      if (!bodies[endpoint]) throw new Error("Unexpected provider request: " + endpoint);
+      return Response.json(bodies[endpoint]);
+    });
+    const connected = await service.connectGalleryApp(company.id, {
+      galleryKey: "github", connectionMethodKey: "app-installation", grantKind: kind,
+      ...(kind === "agent" ? { subjectAgentId: agent.id } : {}),
+      configValues: { version: "1", appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "author" },
+      credentialValues: { "credentials.privateKey": privateKey },
+    }, actor);
+    expect(connected.catalog.map(tool => tool.toolName).sort()).toEqual(legacy ? [] : ["create_pull_request", "get_file_contents"]);
+    let enabledCatalogEntryIds = connected.catalog.map(tool => tool.id);
+    await service.finishGalleryAppConnection(company.id, connected.connectionId, {
+      enabledCatalogEntryIds, askFirstCatalogEntryIds: [], access: { agentIds: [agent.id] },
+    }, actor);
+    if (legacy) {
+      const stored = await service.getConnection(connected.connectionId, company.id);
+      const config = { ...stored.config, url: "https://api.github.com" };
+      await db.update(toolConnections).set({ transport: "rest_api", config, transportConfig: config })
+        .where(eq(toolConnections.id, connected.connectionId));
+      await db.update(toolApplications).set({ type: "rest_api" }).where(eq(toolApplications.id, stored.applicationId));
+      catalogEnabled = true;
+      const refreshed = await service.refreshCatalog(connected.connectionId, actor);
+      expect(refreshed.catalog).toHaveLength(2);
+      expect(refreshed.catalog.every(tool => tool.status === "quarantined")).toBe(true);
+      enabledCatalogEntryIds = refreshed.catalog.map(tool => tool.id);
+      await service.finishGalleryAppConnection(company.id, connected.connectionId, {
+        enabledCatalogEntryIds, reviewedCatalogEntryIds: enabledCatalogEntryIds,
+        askFirstCatalogEntryIds: [], access: { agentIds: [agent.id] },
+      }, actor);
+    }
+
+    // Even an independently allowed PAT connection must not advertise a
+    // different identity's tools when this run selects the App.
+    const pat = await createRemoteToolFixture(db, company.id, { riskLevel: "read" });
+    await db.update(toolConnections).set({
+      config: { ...pat.connection.config, sourceTemplateKey: "github", connectionMethodKey: "mcp-key" },
+    }).where(eq(toolConnections.id, pat.connection.id));
+    await allowConnectionForAgent(db, company.id, agent.id, pat.connection.id);
+    const unrelated = await createRemoteToolFixture(db, company.id, { riskLevel: "read" });
+    await allowConnectionForAgent(db, company.id, agent.id, unrelated.connection.id);
+
+    const { issue, run } = await createIssueAndRun(db, company.id, agent.id);
+    const { initializeRunIdentity } = await import("../services/run-identity.js");
+    await initializeRunIdentity(db, { companyId: company.id, runId: run.id, issueId: issue.id,
+      responsibleUserId: "board", messageIds: [], cause: "instruction" });
+    const gateway = createToolGatewayService(db, { toolActionSigningSecret: "test-secret" });
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    const listed = await gateway.listToolsForSession(session.token);
+    expect(listed.some(tool => tool.connectionId === pat.connection.id)).toBe(false);
+    expect(listed.some(tool => tool.connectionId === unrelated.connection.id)).toBe(true);
+    const appTools = listed.filter(tool => tool.connectionId === connected.connectionId);
+    expect(appTools).toHaveLength(2);
+    expect(appTools.every(tool => tool.providerType === "mcp_remote_http")).toBe(true);
+    const read = appTools.find(tool => tool.upstreamToolName === "get_file_contents")!;
+    const write = appTools.find(tool => tool.upstreamToolName === "create_pull_request")!;
+    const parameters = { owner: "owner", repo: "repo" };
+    await gateway.executeTool({
+      sessionToken: session.token, tool: read.name, parameters,
+      callerHeaders: { Authorization: "Bearer caller-override", "X-MCP-Toolsets": "all", "X-MCP-Exclude-Tools": "" },
+    });
+    await gateway.executeTool({ sessionToken: session.token, tool: write.name, parameters });
+    expect(calls).toEqual(["get_file_contents", "create_pull_request"]);
+
+    const beforeHealth = tokenRevision;
+    await service.checkConnectionHealth(connected.connectionId, actor);
+    expect(tokenRevision).toBeGreaterThan(beforeHealth);
+    await gateway.executeTool({ sessionToken: session.token, tool: read.name, parameters });
+    expect(calls.at(-1)).toBe("get_file_contents");
+
+    await service.finishGalleryAppConnection(company.id, connected.connectionId, {
+      enabledCatalogEntryIds, askFirstCatalogEntryIds: [write.catalogEntryId!], access: { agentIds: [agent.id] },
+    }, actor);
+    const callsBeforeApproval = calls.length;
+    await expect(gateway.executeTool({ sessionToken: session.token, tool: write.name, parameters }))
+      .rejects.toMatchObject({ reasonCode: "approval_required" });
+    expect(calls).toHaveLength(callsBeforeApproval);
+
+    rejectMcp = true;
+    await expect(service.refreshCatalog(connected.connectionId, actor))
+      .rejects.toMatchObject({ status: 502, details: { code: "github_app_mcp_unavailable" } });
+    expect((await service.getConnection(connected.connectionId, company.id)).authKind).toBe("api_key");
+    rejectMcp = false;
+    await service.checkConnectionHealth(connected.connectionId, actor);
+
+    await db.update(connectionGrants).set({ status: "revoked" })
+      .where(eq(connectionGrants.connectionId, connected.connectionId));
+    const requestsBeforeRevocationCheck = fetchMock.mock.calls.length;
+    expect((await gateway.listToolsForSession(session.token)).some(tool =>
+      tool.connectionId === connected.connectionId || tool.connectionId === pat.connection.id,
+    )).toBe(false);
+    await expect(gateway.executeTool({ sessionToken: session.token, tool: read.name, parameters })).rejects.toThrow();
+    expect(fetchMock.mock.calls).toHaveLength(requestsBeforeRevocationCheck);
+    const audits = await db.select().from(toolAccessAuditEvents).where(eq(toolAccessAuditEvents.companyId, company.id));
+    expect(JSON.stringify(audits)).not.toContain("PRIVATE KEY");
+    expect(JSON.stringify(audits)).not.toContain("app-token-");
+    expect(JSON.stringify(audits)).not.toContain("sensitive MCP failure");
   });
 
   it("reconnects a gallery app by rotating the existing credential in place (PAP-10859)", async () => {

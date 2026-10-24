@@ -85,9 +85,9 @@
       "key": "app-installation",
       "label": "Customer-owned GitHub App",
       "purpose": "tool",
-      "transport": "rest_api",
+      "transport": "mcp_remote",
       "defaults": {
-        "serverUrl": "https://api.github.com"
+        "serverUrl": "https://api.githubcopilot.com/mcp/"
       },
       "auth": "api_key",
       "credentialExchange": "github_app_installation",
@@ -99,8 +99,8 @@
         "organization",
         "agent"
       ],
-      "whenToUse": "Use a GitHub App bot identity for selected agents or all agents through Git and gh.",
-      "guidanceMd": "Register a public or private GitHub App and install it on the repositories eligible agents should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides Git and gh credentials; it does not provide MCP tools.",
+      "whenToUse": "Use a GitHub App bot identity for selected agents or all agents through MCP tools, Git and gh.",
+      "guidanceMd": "Register a public or private GitHub App and install it on the repositories eligible agents should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides MCP tools, Git and gh credentials using short-lived installation tokens. GitHub enforces the selected repositories and permissions.",
       "riskTier": "S3",
       "tenantFields": [
         {

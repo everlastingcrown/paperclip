@@ -4,6 +4,7 @@ import type { ConnectionGrant } from "@paperclipai/shared";
 import { HttpError, unprocessable } from "../errors.js";
 
 export const GITHUB_APP_METHOD = "app-installation";
+export const GITHUB_APP_MCP_URL = "https://api.githubcopilot.com/mcp/";
 export const GITHUB_APP_KEY_PATH = "credentials.privateKey";
 const FRESH_MS = 5 * 60_000;
 const MAX_CACHE = 128;

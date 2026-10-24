@@ -310,9 +310,9 @@ const apps = [
         "key": "app-installation",
         "label": "Customer-owned GitHub App",
         "purpose": "tool",
-        "transport": "rest_api",
+        "transport": "mcp_remote",
         "defaults": {
-          "serverUrl": "https://api.github.com"
+          "serverUrl": "https://api.githubcopilot.com/mcp/"
         },
         "auth": "api_key",
         "credentialExchange": "github_app_installation",
@@ -320,10 +320,12 @@ const apps = [
           "customer"
         ],
         "grantKinds": [
+          "user",
+          "organization",
           "agent"
         ],
-        "whenToUse": "Give one agent its own GitHub bot identity for Git and gh.",
-        "guidanceMd": "Register a public or private GitHub App and install it on the repositories this agent should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides Git and gh credentials; it does not provide MCP tools.",
+        "whenToUse": "Use a GitHub App bot identity for selected agents or all agents through MCP tools, Git and gh.",
+        "guidanceMd": "Register a public or private GitHub App and install it on the repositories eligible agents should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides MCP tools, Git and gh credentials using short-lived installation tokens. GitHub enforces the selected repositories and permissions.",
         "riskTier": "S3",
         "tenantFields": [
           {
@@ -412,7 +414,7 @@ const apps = [
           }
         ],
         "warnings": [
-          "Shell Git and gh use the assigned bot identity regardless of who starts the task. Per-tool Ask-first controls do not restrict these credentials.",
+          "Shell Git and gh use this bot identity within the saved ownership and agent access choices. Per-tool Ask-first controls do not restrict these credentials.",
           "Existing tokens can remain usable until GitHub expires or revokes them. Use separate Apps for author and reviewer identities."
         ],
         "consoleLinks": {
@@ -1901,7 +1903,7 @@ const validateApp = (app) => {
     if (
       connectionMethod.auth === "api_key" &&
       !connectionMethod.keyPlacement &&
-      !(app.slug === "github" && connectionMethod.credentialExchange === "github_app_installation" && connectionMethod.transport === "rest_api") &&
+      !(app.slug === "github" && connectionMethod.credentialExchange === "github_app_installation" && ["rest_api", "mcp_remote"].includes(connectionMethod.transport)) &&
       (connectionMethod.purpose ?? "tool") !== "channel"
     )
       throw new Error(

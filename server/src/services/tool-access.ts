@@ -15,7 +15,7 @@ import { COGNEE_STDIO_TEMPLATE, cogneeCloudUrl } from "./cognee-connection.js";
 import { isMemoryConnectorId, isRemoteMcpConnectorMethod, connectionPurposeTransportSchema } from "@paperclipai/shared";
 import { instanceSettingsService } from "./instance-settings.js";
 import { getGitHubAppGrant, isGitHubAppConnection, parseGitHubAppConfig, resolveGitHubAppCredential } from "./github-app-credentials.js";
-import { createGitHubAppClient, GITHUB_APP_KEY_PATH, sanitizeGitHubAppFailure } from "./github-app-client.js";
+import { createGitHubAppClient, GITHUB_APP_KEY_PATH, GITHUB_APP_MCP_URL, sanitizeGitHubAppFailure } from "./github-app-client.js";
 import { githubBotRequest } from "./chat-github-client.js";
 import { syncConnectionCredentialBindings } from "./connection-credential-bindings.js";
 import {
@@ -1225,12 +1225,14 @@ export function projectedConnectionHeaders(
     }
   }
   if (
-    connection.transport === "mcp_remote" &&
+    (connection.transport === "mcp_remote" || isGitHubAppConnection(connection)) &&
     (sourceTemplateKey === "github" || connection.transportConfig?.sourceTemplateKey === "github")
   ) {
     // GitHub excludes Actions from its default catalog. Project this on every
     // discovery and invocation so existing connections gain the toolset too.
     headers["X-MCP-Toolsets"] = "default,actions";
+    // Installation tokens represent a bot, not a user; GET /user is unsupported.
+    if (isGitHubAppConnection(connection)) headers["X-MCP-Exclude-Tools"] = "get_me";
   }
   return headers;
 }
@@ -3074,6 +3076,9 @@ export function toolAccessService(
     connection: typeof toolConnections.$inferSelect,
     actor?: ActorInfo,
   ): Promise<string> {
+    // Saved App connections may still carry the original REST endpoint. Never
+    // send an installation token or PEM to an operator-selected MCP server.
+    if (isGitHubAppConnection(connection)) return GITHUB_APP_MCP_URL;
     const publicEndpoint = remoteEndpoint(connection.config);
     const ref = connection.credentialRefs.find(
       (candidate) => candidate.placement === "url",
@@ -6926,6 +6931,10 @@ export function toolAccessService(
     actor?: ActorInfo,
     options: { forceRefresh?: boolean } = {},
   ): Promise<Record<string, string>> {
+    if (isGitHubAppConnection(connection)) {
+      const credential = await refreshGitHubAppAccess(connection, options.forceRefresh);
+      return { Authorization: `Bearer ${credential.token}` };
+    }
     if (connection.credentialSource === "vercel_connect") {
       const grant = await vercelGrantForConnection(connection, actor);
       return resolveVercelCredentialHeaders(connection, grant, options);
@@ -7153,6 +7162,16 @@ export function toolAccessService(
       await response.body?.cancel().catch(() => undefined);
       throw unprocessable(INSUFFICIENT_CONNECTION_SCOPE_MESSAGE, { code: "oauth_insufficient_scope", connectionId: connection.id });
     }
+    if (response.status === 401 && isGitHubAppConnection(connection)) {
+      await response.body?.cancel().catch(() => undefined);
+      // Discovery is read-only. Retry once with a freshly scoped installation
+      // token; never fall back to a user, another App or an OAuth sign-in.
+      headers = {
+        ...projectedConnectionHeaders(connection),
+        ...(await resolveCredentialHeaders(await getConnectionRow(connection.id), actor, { forceRefresh: true })),
+      };
+      response = await sendToolsList(headers);
+    }
     if (
       response.status === 401 &&
       connection.credentialSource === "vercel_connect"
@@ -7206,6 +7225,10 @@ export function toolAccessService(
       }
     }
     if (!response.ok) {
+      // An App token failure must never convert this bot connection to OAuth.
+      if (isGitHubAppConnection(connection)) throw new HttpError(502,
+        "GitHub MCP access is unavailable. Check the installation permissions and network access to api.githubcopilot.com.",
+        { code: "github_app_mcp_unavailable", status: response.status });
       if ((response.status === 401 || response.status === 403)
         && connection.authKind === "api_key" && isMemoryConnectorId(connection.config.sourceTemplateKey)) {
         throw unprocessable("The provider rejected this API key. Check the key and its account access, then try again.", { code: "memory_api_key_rejected" });
@@ -7290,6 +7313,7 @@ export function toolAccessService(
       response = await sendToolsList(sessionHeaders, cursor);
       if (!response.ok) throw new HttpError(502, "Remote MCP catalog page could not be read", { status: response.status });
     }
+    if (isGitHubAppConnection(connection)) return descriptors.filter(tool => tool.name !== "get_me");
     if (!isRailwayConnection(connection)) return descriptors;
     if (descriptors.some((tool) => normalizeRailwayToolName(tool.name).startsWith(RAILWAY_TOOL_PREFIX))) {
       throw unprocessable("Railway advertised a reserved Paperclip action name. Refresh is blocked pending review.", { code: "railway_tool_name_collision" });
@@ -7417,8 +7441,8 @@ export function toolAccessService(
     assertSupportedConnection(connection);
     if (connection.connectionPurpose === "ai") throw unprocessable("AI connections provide runtime authentication, not tool actions");
     if (isGitHubAppConnection(connection)) {
-      await refreshGitHubAppAccess(connection);
-      return [];
+      // Resolve the exchanged token, never project the vaulted private key.
+      return remoteTools(connection, undefined, actor);
     }
     if (isBrowserUseConnection(connection)) {
       const headers = credentialHeaders ?? await resolveCredentialHeaders(connection, actor);
@@ -7539,7 +7563,11 @@ export function toolAccessService(
       const config = asRecord(connection.config);
       const oauth = asRecord(config.oauth);
       if (isGitHubAppConnection(connection)) {
-        await refreshGitHubAppAccess(connection, true);
+        const credential = await refreshGitHubAppAccess(connection, true);
+        await remoteTools(connection, {
+          ...projectedConnectionHeaders(connection),
+          Authorization: `Bearer ${credential.token}`,
+        }, actor);
       } else if (
         config.sourceTemplateKey === "github" &&
         oauth.connectorProfile === "github.code"
@@ -7609,7 +7637,7 @@ export function toolAccessService(
         connection,
         "ok",
         isGitHubAppConnection(connection)
-          ? "GitHub App Git and gh access is available."
+          ? "GitHub App MCP, Git and gh access is available."
           : config.sourceTemplateKey === "github" &&
           oauth.connectorProfile === "github.code"
           ? "GitHub account, installation, and repository access are available."
@@ -7725,7 +7753,7 @@ export function toolAccessService(
     const existingByName = new Map(
       existingRows.map((entry) => [entry.toolName, entry]),
     );
-    if (isRemoteMcpConnectorMethod(connection.config.sourceTemplateKey, connection.config.connectionMethodKey)) {
+    if (isGitHubAppConnection(connection) || isRemoteMcpConnectorMethod(connection.config.sourceTemplateKey, connection.config.connectionMethodKey)) {
       const discoveredNames = new Set(descriptors.map((descriptor) => descriptor.name));
       const removedIds = existingRows.filter((entry) => !discoveredNames.has(entry.toolName) && entry.status !== "disabled").map((entry) => entry.id);
       if (removedIds.length) await db.update(toolCatalogEntries)
@@ -7768,7 +7796,7 @@ export function toolAccessService(
         : null;
     const quarantineOnRefresh =
       (!refreshOptions.enableAllByDefault || (isRailwayEndpoint(connection.config.url) && existingRows.length > 0)) &&
-      shouldQuarantineNewEntries(connection) &&
+      (shouldQuarantineNewEntries(connection) || isGitHubAppConnection(connection)) &&
       (connection.status === "active" ||
         (isRailwayEndpoint(connection.config.url) && existingRows.length > 0) ||
         sourceTemplateKey === "posthog" ||
@@ -7883,7 +7911,7 @@ export function toolAccessService(
         transportConfig: normalizedTransportConfig,
         healthStatus: "ok",
         healthMessage: isGitHubAppConnection(connection)
-          ? "GitHub App Git and gh access is available. No MCP tools are provided."
+          ? "GitHub App MCP, Git and gh access is available."
           : isAgentMailConnection(connection)
           ? "AgentMail API key is connected."
           : "Tool catalog refreshed.",
@@ -12651,7 +12679,7 @@ export function toolAccessService(
           // Grant-backed setup keeps the full discovered catalog selectable;
           // the wizard projects the app's action defaults into policies at
           // finish time instead of using catalog quarantine as access state.
-          quarantineNewEntries: galleryEntry.slug === "railway",
+          quarantineNewEntries: galleryEntry.slug === "railway" || method?.credentialExchange === "github_app_installation",
           ...(remoteMcpConnector ? {
             mcpSessionRequired: true,
             mcpAuthMode: input.authMode ?? "auto",
@@ -13792,8 +13820,8 @@ export function toolAccessService(
       const grant = await getGitHubAppGrant(db, connection);
       if ((grant.kind === "agent" && (input.access === "all_agents" || input.access.agentIds.length !== 1
           || input.access.agentIds[0] !== grant.subjectAgentId))
-        || input.enabledCatalogEntryIds.length || input.askFirstCatalogEntryIds.length) {
-        throw badRequest("A GitHub App provides Git and gh only; dedicated identities require their assigned agent.");
+        ) {
+        throw badRequest("Dedicated GitHub App identities require their assigned agent.");
       }
       await refreshGitHubAppAccess(connection);
     }
@@ -19002,7 +19030,7 @@ export function toolAccessService(
         .where(eq(toolCatalogEntries.connectionId, connection.id))
         .orderBy(desc(toolCatalogEntries.updatedAt));
       const cacheExpired =
-        connection.transport === "mcp_remote" &&
+        (connection.transport === "mcp_remote" || isGitHubAppConnection(connection)) &&
         connection.status !== "archived" &&
         (rows.length === 0 ||
           !connection.lastCatalogRefreshAt ||

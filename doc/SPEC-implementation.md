@@ -233,6 +233,10 @@ Customer-owned GitHub App credentials accept Read, Author, and Reviewer permissi
 templates or an explicit custom JSON permission map. Custom permissions replace
 the template and must be granted by the installation. Token requests restrict
 repositories and permissions explicitly. Reconnect preserves the saved scope.
+The same installation identity supplies hosted GitHub MCP discovery and calls
+through the existing action catalog, profiles, approvals, quarantine, and audit
+path. Private keys never reach MCP. Legacy REST App connections remain usable;
+new actions require review. Run discovery and invocation select the same identity.
 
 ## 7.6 `issues` (core task entity)
 
