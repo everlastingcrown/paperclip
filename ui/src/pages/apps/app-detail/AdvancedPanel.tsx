@@ -1,3 +1,4 @@
+import { ConnectionCredentialInput } from "@/features/connections/ConnectionCredentialInput";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowUpRight, ChevronRight, Loader2, Lock } from "lucide-react";
@@ -357,12 +358,13 @@ function ReconnectForm({
         fields.map((field) => (
           <div key={field.configPath}>
             <label className="text-xs font-medium text-foreground">{field.label}</label>
-            <Input
+            <ConnectionCredentialInput
+              configPath={field.configPath}
               type="password"
               aria-label={field.label}
               autoComplete="off"
               value={values[field.configPath] ?? ""}
-              onChange={(e) => setValues({ ...values, [field.configPath]: e.target.value })}
+              onChange={(value) => setValues({ ...values, [field.configPath]: value })}
               placeholder="****************"
               className="mt-1 h-10 font-mono"
             />

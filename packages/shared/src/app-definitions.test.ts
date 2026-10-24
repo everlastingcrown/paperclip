@@ -289,8 +289,21 @@ describe("AppDefinition catalog", () => {
   it("separates GitHub tools from the review bot without changing the provider identity", () => {
     const github = getConnectableAppDefinition("github")!;
     const bot = getConnectableAppDefinition("github-code-review-bot")!;
-    expect(github.methods.map((method) => method.key)).toEqual(["managed", "mcp-key"]);
+    expect(github.methods.map((method) => method.key)).toEqual(["managed", "mcp-key", "app-installation"]);
     expect(github.methods.every((method) => method.purpose === "tool")).toBe(true);
+    const installation = github.methods.find(method => method.key === "app-installation")!;
+    const appIdPattern = new RegExp(installation.tenantFields!.find(field => field.key === "appId")!.validation!.pattern!);
+    const installationIdPattern = new RegExp(installation.tenantFields!.find(field => field.key === "installationId")!.validation!.pattern!);
+    for (const id of ["123456", "Iv1.0123456789abcdef", "Iv23li0123456789abcd"]) expect(appIdPattern.test(id)).toBe(true);
+    expect(installationIdPattern.test("12345678")).toBe(true);
+    expect(installationIdPattern.test("Iv1.0123456789abcdef")).toBe(false);
+    expect(installation).toMatchObject({ transport: "mcp_remote", auth: "api_key", credentialExchange: "github_app_installation", grantKinds: ["user", "organization", "agent"] });
+    expect(installation.keyPlacement).toBeUndefined();
+    expect(appDefinitionSchema.safeParse(github).success).toBe(true);
+    expect(appDefinitionSchema.safeParse({ ...github, methods: [{ ...installation, grantKinds: ["user"] }] }).success).toBe(true);
+    expect(installation.defaults?.serverUrl).toBe("https://api.githubcopilot.com/mcp/");
+    expect(appDefinitionSchema.safeParse({ ...github, methods: [{ ...installation, transport: "rest_api" }] }).success).toBe(true);
+    expect(appDefinitionSchema.safeParse({ ...github, methods: [{ ...installation, transport: "local_stdio" }] }).success).toBe(false);
     expect(bot.name).toBe("GitHub Code Review Bot");
     expect(bot.methods).toHaveLength(1);
     expect(bot.methods[0]).toMatchObject({ provider: "github", purpose: "channel", transport: "chat_sdk" });
@@ -1027,6 +1040,10 @@ describe("AppDefinition catalog", () => {
     ).sort();
     expect(required).toEqual([
       "clickhouse:mcp-oauth:serviceId",
+      "github:app-installation:appId",
+      "github:app-installation:installationId",
+      "github:app-installation:permissionProfile",
+      "github:app-installation:repositories",
       "honcho:mcp-api-key:workspaceId",
       "shopify:storefront-mcp:storeDomain",
       "shopify:ucp-commerce:storeDomain",
@@ -1082,7 +1099,8 @@ describe("AppDefinition catalog", () => {
       for (const method of app.methods) {
         if (
           method.auth === "api_key" &&
-          (method.purpose ?? "tool") !== "channel"
+          (method.purpose ?? "tool") !== "channel" &&
+          !method.credentialExchange
         )
           expect(method.keyPlacement).toBeTruthy();
         if (method.auth === "oauth")

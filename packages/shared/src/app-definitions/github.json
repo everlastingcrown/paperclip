@@ -80,6 +80,122 @@
         "organization",
         "repository"
       ]
+    },
+    {
+      "key": "app-installation",
+      "label": "Customer-owned GitHub App",
+      "purpose": "tool",
+      "transport": "mcp_remote",
+      "defaults": {
+        "serverUrl": "https://api.githubcopilot.com/mcp/"
+      },
+      "auth": "api_key",
+      "credentialExchange": "github_app_installation",
+      "ownershipModes": [
+        "customer"
+      ],
+      "grantKinds": [
+        "user",
+        "organization",
+        "agent"
+      ],
+      "whenToUse": "Use a GitHub App bot identity for selected agents or all agents through MCP tools, Git and gh.",
+      "guidanceMd": "Register a public or private GitHub App and install it on the repositories eligible agents should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides MCP tools, Git and gh credentials using short-lived installation tokens. GitHub enforces the selected repositories and permissions.",
+      "riskTier": "S3",
+      "tenantFields": [
+        {
+          "key": "version",
+          "label": "Credential version",
+          "type": "text",
+          "hidden": true,
+          "defaultValue": "1",
+          "validation": {
+            "pattern": "^1$"
+          }
+        },
+        {
+          "key": "appId",
+          "placeholder": "123456",
+          "label": "App ID or Client ID",
+          "type": "text",
+          "required": true,
+          "validation": {
+            "pattern": "^(?:[1-9][0-9]*|Iv[0-9][A-Za-z0-9.]{1,97})$"
+          }
+        },
+        {
+          "key": "installationId",
+          "placeholder": "12345678",
+          "label": "Installation ID",
+          "type": "text",
+          "required": true,
+          "validation": {
+            "pattern": "^[1-9][0-9]*$"
+          }
+        },
+        {
+          "key": "repositories",
+          "placeholder": "owner/repository",
+          "label": "Selected repositories (owner/repository, separated by commas)",
+          "type": "textarea",
+          "required": true
+        },
+        {
+          "key": "permissionProfile",
+          "placeholder": "read",
+          "label": "Permissions",
+          "type": "select",
+          "required": true,
+          "defaultValue": "read",
+          "options": [
+            {
+              "value": "read",
+              "label": "Read contents, pull requests and issues"
+            },
+            {
+              "value": "author",
+              "label": "Author: write contents and pull requests, read issues"
+            },
+            {
+              "value": "reviewer",
+              "label": "Reviewer: read contents and issues, write pull requests"
+            },
+            {
+              "value": "custom",
+              "label": "Custom permissions"
+            }
+          ]
+        },
+        {
+          "key": "customPermissions",
+          "label": "Custom permissions (JSON)",
+          "type": "textarea",
+          "placeholder": "{\"contents\":\"read\",\"pull_requests\":\"write\",\"checks\":\"write\"}",
+          "validation": {
+            "maxLength": 10000
+          },
+          "helperMd": "Enter a non-empty JSON object using GitHub permission names and read, write, or admin levels. Only the selected permissions are requested; GitHub must grant them to this installation. For example: {\"contents\":\"read\",\"checks\":\"write\"}."
+        }
+      ],
+      "credentialFields": [
+        {
+          "key": "privateKey",
+          "placeholder": "-----BEGIN RSA PRIVATE KEY-----",
+          "label": "App private key (PEM)",
+          "type": "textarea",
+          "secret": true,
+          "required": true,
+          "helperMd": "The App installation must grant the selected repositories and permissions. Templates request contents, pull requests and issues; Custom requests exactly the permissions you enter. Approve updated App permissions in GitHub installation settings."
+        }
+      ],
+      "warnings": [
+        "Shell Git and gh use this bot identity within the saved ownership and agent access choices. Per-tool Ask-first controls do not restrict these credentials.",
+        "Existing tokens can remain usable until GitHub expires or revokes them. Use separate Apps for author and reviewer identities."
+      ],
+      "consoleLinks": {
+        "register": "https://github.com/settings/apps/new",
+        "docs": "https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation"
+      }
     }
   ]
 }
