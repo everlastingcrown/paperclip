@@ -96,7 +96,7 @@ function connectionMethodUnavailable(connection: ToolConnection, galleryEntry: A
     && !getAvailableConnectionMethod(galleryEntry, methodKey);
 }
 
-function KeySection({
+export function KeySection({
   connection,
   galleryEntry,
   onReplaced,

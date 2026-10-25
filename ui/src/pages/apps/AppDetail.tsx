@@ -64,6 +64,7 @@ import { RailwayAccessPanel } from "./app-detail/RailwayAccessPanel";
 import { ReviewPanel } from "./app-detail/ReviewPanel";
 import {
   ReconnectCard,
+  KeySection,
   DangerZone,
   connectionAddress,
   connectionTransportLabel,
@@ -646,6 +647,23 @@ function StandardAppDetail({ renderActions, renderAgentSettings, renderConnectio
                 ? <ConnectedAggregatorApps key={connection.id} connection={connection} /> : null}
               {connection.config?.sourceTemplateKey === "honcho" && <HonchoWorkspaceSettings key={connection.id} connection={connection} canConfigure={grantsQuery.data?.capabilities?.canConfigure ?? false} />}
               {renderConnectionSettings?.(connection)}
+              {connection.config?.sourceTemplateKey === "github" && connection.config?.connectionMethodKey === "app-installation" && (
+                <section className="space-y-3" aria-label="GitHub App configuration">
+                  <h2 className="text-sm font-semibold">GitHub App configuration</h2>
+                  <p className="text-sm text-muted-foreground">
+                    To change GitHub permissions or selected repositories, create a new connection.
+                    Reconnect below to replace this App's private key. Agent access and action permissions can be changed on this page.
+                  </p>
+                  <KeySection
+                    key={connection.id}
+                    connection={connection}
+                    galleryEntry={logoEntry}
+                    canReplace={canReconnect}
+                    unavailableMessage={reconnectUnavailableMessage}
+                    onReplaced={() => { void queryClient.invalidateQueries({ queryKey: ["tools"] }); }}
+                  />
+                </section>
+              )}
               {connection.config?.sourceTemplateKey === "browser-use-cloud" && <BrowserUseSettingsPanel connection={connection} grants={grantsQuery.data} />}
               {connection.config?.sourceTemplateKey === "railway" && <RailwayAccessPanel connection={connection} grants={grantsQuery.data} />}
               {connection.config?.provider === "agentmail" && <EmailConnectionInboxes companyId={connection.companyId} connectionId={connection.id} canConfigure={grantsQuery.data?.capabilities?.canConfigure ?? false} />}

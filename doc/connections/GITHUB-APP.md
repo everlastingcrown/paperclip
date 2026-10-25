@@ -135,7 +135,9 @@ Local disablement, grant revocation, and uninstall stop new acquisition immediat
 Already-exported tokens can remain usable until GitHub expires or revokes them;
 clearing a local cache does not revoke tokens held by a running process.
 
-Use **Reconnect** to replace the private key. The connection, ownership, agent
+On the connection's **Permissions** page, use **GitHub App configuration →
+Reconnect** to replace the private key. The same control remains available under
+**Danger zone**. The connection, ownership, agent
 access, installation, repositories, and permissions stay fixed. Use Permissions
 to change agent access. Changing ownership or App scope requires a new connection.
 Removing a connection in Paperclip does not uninstall
