@@ -1,6 +1,6 @@
-# Customer-owned GitHub App credentials
+# Custom GitHub App credentials
 
-Use **GitHub → Customer-owned GitHub App** to give selected agents or all agents
+Use **GitHub → Custom GitHub App** to give selected agents or all agents
 an App's bot identity for GitHub MCP tools, managed Git, `gh`, and server-side
 repository checkout/fetch. Both public and private GitHub.com App registrations
 use installation access tokens. MCP discovery and invocation use GitHub's hosted
@@ -17,8 +17,8 @@ the PEM is never sent to MCP. Existing managed OAuth and PAT methods remain avai
    selection. Generate an RSA private key. Keep the App ID and installation ID (the number in the
    installation settings URL).
 3. Open GitHub setup in Paperclip. If Paperclip enrollment or managed sign-in is
-   unavailable, select **Connect to GitHub App** directly. Otherwise, under the
-   connection method choices, select **Customer-owned GitHub App**. This method
+   unavailable, select **Connect a custom GitHub App** directly. Otherwise, under the
+   connection method choices, select **Custom GitHub App**. This method
    requires neither Paperclip Cloud enrollment nor authorization of the official
    Paperclip OAuth app. Choose personal or shared ownership, then select agents
    or allow all agents. Dedicated ownership remains available for one agent.

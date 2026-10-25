@@ -385,7 +385,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     listGalleryMock.mockResolvedValue({ apps: [GITHUB_MANAGED] });
     await render();
     await openAccessAdvanced();
-    await act(async () => radioContaining("Customer-owned GitHub App")!.click());
+    await act(async () => radioContaining("Custom GitHub App")!.click());
     await flushReact();
 
     await openAccessAdvanced();
@@ -395,7 +395,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
       setInputValue(container.querySelector<HTMLInputElement>('#connection-name')!, "Author bot");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
-      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Repositories"]')!, "example/repository");
       setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[autocomplete="off"]')!, "fixture-pem");
     });
     expect(buttonByText("Connect")?.disabled).toBe(true);
@@ -432,7 +432,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     await act(async () => {
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
-      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Repositories"]')!, "example/repository");
       setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[autocomplete="off"]')!, "fixture-pem");
     });
     await act(async () => buttonByText("Connect")!.click());
@@ -453,12 +453,12 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     await act(async () => {
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
-      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Repositories"]')!, "example/repository");
       setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[autocomplete="off"]')!, "fixture-pem");
     });
     expect(buttonByText("Connect")?.disabled).toBe(false);
     expect(container.querySelector('[aria-label="Custom permissions (JSON)"]')).toBeNull();
-    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Permissions"]')!;
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="GitHub permissions"]')!;
     const choose = async (value: string) => act(async () => {
       select.value = value;
       select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -1792,7 +1792,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     });
     await render(undefined, false, host === "dialog"
       ? <ConnectionSetupFlow host="dialog" serviceSlug="github" forceNewConnection /> : undefined);
-    await act(async () => buttonByText("Connect to GitHub App")!.click());
+    await act(async () => buttonByText("Connect a custom GitHub App")!.click());
     await flushReact();
 
     expect(container.textContent).not.toContain("Connect with Paperclip");
@@ -1807,7 +1807,7 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
       setInputValue(container.querySelector<HTMLInputElement>('#connection-name')!, "Author bot");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="123456"]')!, "123456");
       setInputValue(container.querySelector<HTMLInputElement>('input[placeholder="12345678"]')!, "12345678");
-      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[placeholder="owner/repository"]')!, "example/repository");
+      setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Repositories"]')!, "example/repository");
       setTextareaValue(container.querySelector<HTMLTextAreaElement>('textarea[autocomplete="off"]')!, "fixture-pem");
     });
     await act(async () => buttonByText("Connect")!.click());

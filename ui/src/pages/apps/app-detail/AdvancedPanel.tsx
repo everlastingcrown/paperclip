@@ -118,7 +118,9 @@ export function KeySection({
           <div>
             <h2 className="text-sm font-medium text-foreground">Reconnect</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {canReplace ? "Replace the stored credential." : unavailableMessage}
+              {canReplace ? connection.config?.sourceTemplateKey === "github" && connection.config?.connectionMethodKey === "app-installation"
+                ? "Rename this connection, keep the saved private key or paste a replacement."
+                : "Replace the stored credential." : unavailableMessage}
             </p>
           </div>
         </div>

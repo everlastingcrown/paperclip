@@ -651,8 +651,8 @@ function StandardAppDetail({ renderActions, renderAgentSettings, renderConnectio
                 <section className="space-y-3" aria-label="GitHub App configuration">
                   <h2 className="text-sm font-semibold">GitHub App configuration</h2>
                   <p className="text-sm text-muted-foreground">
-                    To change GitHub permissions or selected repositories, create a new connection.
-                    Reconnect below to replace this App's private key. Agent access and action permissions can be changed on this page.
+                    Reconnect to rename this connection or replace its private key. Create a new connection to change
+                    the App, installation, repositories, GitHub permissions or ownership. Manage agent access and Paperclip action permissions below.
                   </p>
                   <KeySection
                     key={connection.id}

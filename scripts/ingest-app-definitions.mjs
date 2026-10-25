@@ -308,7 +308,7 @@ const apps = [
       ),
       {
         "key": "app-installation",
-        "label": "Customer-owned GitHub App",
+        "label": "Custom GitHub App",
         "purpose": "tool",
         "transport": "mcp_remote",
         "defaults": {
@@ -324,8 +324,8 @@ const apps = [
           "organization",
           "agent"
         ],
-        "whenToUse": "Use a GitHub App bot identity for selected agents or all agents through MCP tools, Git and gh.",
-        "guidanceMd": "Register a public or private GitHub App and install it on the repositories eligible agents should use. Enter the installation ID from GitHub's installation settings URL. Paperclip verifies that the App, installation and selected repositories match. This method provides MCP tools, Git and gh credentials using short-lived installation tokens. GitHub enforces the selected repositories and permissions.",
+        "whenToUse": "Use your own GitHub App to give agents a bot identity for GitHub tools, Git and gh.",
+        "guidanceMd": "Create a GitHub App in your user or organization settings, then install it on the repositories you want to connect. Webhooks and OAuth callbacks are not required. Enter its IDs, repository access and private key below.",
         "riskTier": "S3",
         "tenantFields": [
           {
@@ -346,7 +346,8 @@ const apps = [
             "required": true,
             "validation": {
               "pattern": "^(?:[1-9][0-9]*|Iv[0-9][A-Za-z0-9.]{1,97})$"
-            }
+            },
+            "helperMd": "In GitHub, open Settings → Developer settings → GitHub Apps → your App. Copy the App ID or Client ID from its settings page."
           },
           {
             "key": "installationId",
@@ -356,26 +357,28 @@ const apps = [
             "required": true,
             "validation": {
               "pattern": "^[1-9][0-9]*$"
-            }
+            },
+            "helperMd": "In your App settings, open Install App, then Configure for the target account. Copy the number after /installations/ in the URL."
           },
           {
             "key": "repositories",
-            "placeholder": "owner/repository",
-            "label": "Selected repositories (owner/repository, separated by commas)",
+            "placeholder": "acme/backend, acme/frontend",
+            "label": "Repositories",
             "type": "textarea",
-            "required": true
+            "required": true,
+            "helperMd": "Enter owner/repository names separated by commas. Each repository must be included in this App installation."
           },
           {
             "key": "permissionProfile",
             "placeholder": "read",
-            "label": "Permissions",
+            "label": "GitHub permissions",
             "type": "select",
             "required": true,
             "defaultValue": "read",
             "options": [
               {
                 "value": "read",
-                "label": "Read contents, pull requests and issues"
+                "label": "Read: contents, pull requests and issues"
               },
               {
                 "value": "author",
@@ -389,7 +392,8 @@ const apps = [
                 "value": "custom",
                 "label": "Custom permissions"
               }
-            ]
+            ],
+            "helperMd": "Grant these permissions in the App’s GitHub settings, then approve any changes for its installation. Paperclip cannot grant permissions the installation does not have."
           },
           {
             "key": "customPermissions",
@@ -399,7 +403,7 @@ const apps = [
             "validation": {
               "maxLength": 10000
             },
-            "helperMd": "Enter a non-empty JSON object using GitHub permission names and read, write, or admin levels. Only the selected permissions are requested; GitHub must grant them to this installation. For example: {\"contents\":\"read\",\"checks\":\"write\"}."
+            "helperMd": "Use GitHub API permission names with read, write or admin levels, for example: {\"contents\":\"read\",\"checks\":\"write\"}. This replaces the preset; only the permissions you enter are requested."
           }
         ],
         "credentialFields": [
@@ -410,11 +414,11 @@ const apps = [
             "type": "textarea",
             "secret": true,
             "required": true,
-            "helperMd": "The App installation must grant the selected repositories and permissions. Templates request contents, pull requests and issues; Custom requests exactly the permissions you enter. Approve updated App permissions in GitHub installation settings."
+            "helperMd": "In your App’s GitHub settings, under Private keys, choose Generate a private key. Open the downloaded .pem file and paste its entire contents, including the BEGIN and END lines. Paperclip encrypts the saved key."
           }
         ],
         "warnings": [
-          "Shell Git and gh use this bot identity within the saved ownership and agent access choices. Per-tool Ask-first controls do not restrict these credentials.",
+          "Git and gh use this bot’s repository access and GitHub permissions. Paperclip’s per-tool Ask-first controls do not apply to Git or gh.",
           "Existing tokens can remain usable until GitHub expires or revokes them. Use separate Apps for author and reviewer identities."
         ],
         "consoleLinks": {

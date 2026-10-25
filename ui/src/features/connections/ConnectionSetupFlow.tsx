@@ -1023,7 +1023,7 @@ function StandardConnectionSetupFlow({
         setConfigValues(defaultMethodConfig(githubAppMethod));
       }}
     >
-      Connect to GitHub App
+      Connect a custom GitHub App
     </Button>
   ) : null;
   const requestedDefinitionUsesManagedConnector = !selectedIndependentMethod && Boolean(
@@ -3806,14 +3806,25 @@ function KeyStep({
   return (
     <div className="mx-auto max-w-xl">
       {requirementsUrl ? (
-        <div className="mb-4 flex justify-end">
+        <div className="mb-4 flex justify-end gap-4">
+          {githubAppMethod && !fixedGitHubApp && method?.consoleLinks?.register ? (
+            <a
+              href={method.consoleLinks.register}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              Create an App on GitHub
+              <ArrowUpRight className="h-3 w-3" />
+            </a>
+          ) : null}
           <a
             href={requirementsUrl}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
           >
-            Review requirements
+            {githubAppMethod ? "GitHub App setup guide" : "Review requirements"}
             <ArrowUpRight className="h-3 w-3" />
           </a>
         </div>
@@ -3867,7 +3878,7 @@ function KeyStep({
         {error ? <div role="alert"><InlineBanner tone="danger">{error}</InlineBanner></div> : null}
 
         {savedCredentialPaths.length > 0 ? <p className="text-sm text-muted-foreground">Leave the key blank to keep the saved credential, or paste a replacement.</p> : null}
-        {fixedGitHubApp ? <p className="text-sm text-muted-foreground">Reconnect keeps this App, installation, repositories, permission profile, ownership and agent access. Create a new connection to change them.</p> : null}
+        {fixedGitHubApp ? <p className="text-sm text-muted-foreground">You can rename this connection or replace its private key. App, installation, repositories, GitHub permissions and ownership are fixed. Manage agent access on the Permissions page.</p> : null}
         <fieldset disabled={fixedGitHubApp} className="space-y-6">
           {standardConfigFields.map((field) => (
             <MethodConfigField
