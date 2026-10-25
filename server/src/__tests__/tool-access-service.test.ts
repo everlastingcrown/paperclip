@@ -100,8 +100,6 @@ import { HttpError } from "../errors.js";
 import type { VercelConnectClient } from "../services/vercel-connect.js";
 import { invalidatePaperclipCloudConnectorCapabilities, PaperclipCloudConnectorError, type PaperclipCloudConnector } from "../services/paperclip-cloud-connector.js";
 
-// The credential resolver creates its cached client at module load. Forward
-// requests to each test's fetch fixture rather than capturing the real network.
 vi.mock("../services/github-app-client.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../services/github-app-client.js")>();
   return {
@@ -17877,7 +17875,6 @@ describeEmbeddedPostgres("tool access service", () => {
     }, actor);
     expect(renamed.connectionId).toBe(connected.connectionId);
     expect(await service.getConnection(renamed.connectionId, company.id)).toMatchObject({ name: "Review bot" });
-    // Once it is an App connection, recovery must still preserve its access policy.
     await expect(service.connectGalleryApp(company.id, {
       ...input, configValues: { ...input.configValues, repositories: "owner/other" },
       resumeConnectionId: connected.connectionId,
@@ -17974,7 +17971,6 @@ describeEmbeddedPostgres("tool access service", () => {
         configValues: { ...configValues, customPermissions: '{"contents":"write"}' }, credentialValues: {},
       }, actor)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("Reconnect preserves the App") });
     }
-    // A database timestamp can have precision beyond a JavaScript Date.
     await db.update(connectionGrants).set({
       providerTenant: null, updatedAt: sql`'2026-10-25 01:02:03.123456+00'::timestamptz`,
     }).where(eq(connectionGrants.connectionId, connected.connectionId));
@@ -18003,7 +17999,6 @@ describeEmbeddedPostgres("tool access service", () => {
     const reconnect = (value: string) => service.reconnectGalleryApp(connected.connectionId, company.id,
       { credentialValues: { "credentials.privateKey": value } }, actor);
 
-    // Neither malformed keys nor valid RSA keys rejected by GitHub rotate the vault.
     await expect(reconnect("invalid PEM")).rejects.toMatchObject({ status: 422 });
     rejectB = true;
     await expect(reconnect(pem(keyB))).rejects.toMatchObject({ status: 422 });
@@ -18016,7 +18011,6 @@ describeEmbeddedPostgres("tool access service", () => {
     await expect(acquire()).resolves.toMatchObject({ token: "app-token" });
     expect(authenticatedKeys.at(-1)).toBe("A");
 
-    // A verified replacement must not survive a later MCP discovery failure.
     rejectB = false;
     rejectMcp = true;
     await expect(service.connectGalleryApp(company.id, {
@@ -18030,7 +18024,6 @@ describeEmbeddedPostgres("tool access service", () => {
     await expect(acquire()).resolves.toMatchObject({ token: "app-token" });
     expect(authenticatedKeys.at(-1)).toBe("A");
 
-    // Key replacement must preserve reviewed access and pending review.
     discoveredTools.push(readTool("list_branches"));
     const pending = await service.refreshCatalog(connected.connectionId, actor);
     expect(pending.catalog.find(entry => entry.toolName === "list_branches")?.status).toBe("quarantined");
@@ -18041,7 +18034,6 @@ describeEmbeddedPostgres("tool access service", () => {
     discoveredTools = [readTool("get_file_contents"), readTool("list_issues", "Changed action"),
       readTool("list_branches"), readTool("list_tags")];
 
-    // A is already revoked: reconnect must verify B without depending on A.
     revokeA = true;
     rejectB = false;
     authenticatedKeys.length = 0;
@@ -18229,8 +18221,6 @@ describeEmbeddedPostgres("tool access service", () => {
       }, actor);
     }
 
-    // Even an independently allowed PAT connection must not advertise a
-    // different identity's tools when this run selects the App.
     const pat = await createRemoteToolFixture(db, company.id, { riskLevel: "read" });
     await db.update(toolConnections).set({
       config: { ...pat.connection.config, sourceTemplateKey: "github", connectionMethodKey: "mcp-key" },
@@ -18271,8 +18261,6 @@ describeEmbeddedPostgres("tool access service", () => {
       enabledCatalogEntryIds, askFirstCatalogEntryIds: [write.catalogEntryId!], access: { agentIds: [agent.id] },
     }, actor);
     const callsBeforeApproval = calls.length;
-    // Exercise a new write under the changed policy instead of replaying the
-    // completed write with the gateway's default idempotency key.
     await expect(gateway.executeTool({
       sessionToken: session.token, tool: write.name, parameters,
       idempotencyKey: `github-app-approval:${connected.connectionId}`,
