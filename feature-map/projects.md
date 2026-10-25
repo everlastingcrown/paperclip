@@ -51,4 +51,3 @@ identity and URL without granting runtime credentials or repository-content
 access. Provider-fixture coverage lives in
 [repository persistence](../../server/src/__tests__/project-repositories-persistence.test.ts);
 live App checkout remains a separate acceptance requirement.
-

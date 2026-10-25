@@ -2876,7 +2876,7 @@ function healthFailureHttpStatus(failure: {
   if (failure.code === "oauth_challenge") return 422;
   if (failure.code === "oauth_refresh_missing") return 422;
   if (failure.code === "oauth_reauthorization_required") return 422;
-  if (failure.code === "github_app_mcp_unavailable" || code === "slack_mcp_access_disabled") return 422;
+  if (failure.code === "slack_mcp_access_disabled") return 422;
   if (failure.code === "user_authorization_required") return 422;
   if (failure.code === "composio_broker_retired") return 422;
   if (failure.code === "tool_connection_transport_unsupported") return 422;
