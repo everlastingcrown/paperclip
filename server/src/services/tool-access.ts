@@ -13575,6 +13575,11 @@ export function toolAccessService(
                   .where(eq(connectionGrants.id, current.id));
               }
             }
+            if (connectionMutationIsStillCurrent) {
+              // Restore declarations from the restored grant before deleting
+              // the failed attempt's secrets and personal definitions.
+              await syncConnectionCredentialBindings(tx, revivedConnectionPrevious);
+            }
           });
         } catch (rollbackError) {
           identityRollbackError = rollbackError;
