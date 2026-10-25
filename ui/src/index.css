@@ -3409,7 +3409,6 @@ span.paperclip-mention-chip[data-mention-kind="external-object"] {
   .agent-setup-popover { overflow-y: auto; }
 }
 
-/* Conceal PEM input without changing its line breaks. */
 .secret-textarea {
   -webkit-text-security: disc;
 }

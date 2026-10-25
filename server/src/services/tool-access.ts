@@ -1102,7 +1102,6 @@ export function normalizeConnectionMethodConfig(
   const values: Record<string, string | boolean> = {};
   for (const field of fields) {
     let raw = configValues?.[field.key] ?? field.defaultValue;
-    // API callers may use a numeric schema version; persist the catalog form representation.
     if (method.credentialExchange === "github_app_installation" && field.key === "version" && raw === 1) raw = "1";
     if (field.type === "checkbox") {
       if (raw !== undefined && typeof raw !== "boolean")
@@ -1233,7 +1232,6 @@ export function projectedConnectionHeaders(
     // GitHub excludes Actions from its default catalog. Project this on every
     // discovery and invocation so existing connections gain the toolset too.
     headers["X-MCP-Toolsets"] = "default,actions";
-    // Installation tokens represent a bot, not a user; GET /user is unsupported.
     if (isGitHubAppConnection(connection)) headers["X-MCP-Exclude-Tools"] = "get_me";
   }
   return headers;
@@ -3078,8 +3076,6 @@ export function toolAccessService(
     connection: typeof toolConnections.$inferSelect,
     actor?: ActorInfo,
   ): Promise<string> {
-    // Saved App connections may still carry the original REST endpoint. Never
-    // send an installation token or PEM to an operator-selected MCP server.
     if (isGitHubAppConnection(connection)) return GITHUB_APP_MCP_URL;
     const publicEndpoint = remoteEndpoint(connection.config);
     const ref = connection.credentialRefs.find(
@@ -7166,8 +7162,6 @@ export function toolAccessService(
     }
     if (response.status === 401 && isGitHubAppConnection(connection)) {
       await response.body?.cancel().catch(() => undefined);
-      // Discovery is read-only. Retry once with a freshly scoped installation
-      // token; never fall back to a user, another App or an OAuth sign-in.
       headers = {
         ...projectedConnectionHeaders(connection),
         ...(await resolveCredentialHeaders(connection, actor, { forceRefresh: true })),
@@ -7227,7 +7221,6 @@ export function toolAccessService(
       }
     }
     if (!response.ok) {
-      // An App token failure must never convert this bot connection to OAuth.
       if (isGitHubAppConnection(connection)) throw new HttpError(502,
         "GitHub MCP access is unavailable. Check the installation permissions and network access to api.githubcopilot.com.",
         { code: "github_app_mcp_unavailable", status: response.status });
@@ -12644,8 +12637,6 @@ export function toolAccessService(
         : normalizeConnectionMethodConfig(method, input.configValues ?? asRecord(asRecord(retainedConnection?.config).methodConfig));
     if (galleryEntry?.slug === "github" && method?.key === "app-installation") {
       const parsed = parseGitHubAppConfig(normalizedMethodConfig?.values);
-      // Name-based recovery may retain an archived OAuth/PAT connection, whose
-      // settings are not an App policy. Only existing App connections pin it.
       if (retainedConnection && isGitHubAppConnection(retainedConnection)
         && JSON.stringify(parsed) !== JSON.stringify(parseGitHubAppConfig(asRecord(retainedConnection.config).methodConfig))) {
         throw badRequest("Reconnect preserves the App, installation and access policy. Create a new connection to change them.");
@@ -13594,8 +13585,6 @@ export function toolAccessService(
               }
             }
             if (connectionMutationIsStillCurrent) {
-              // Restore declarations from the restored grant before deleting
-              // the failed attempt's secrets and personal definitions.
               await syncConnectionCredentialBindings(tx, revivedConnectionPrevious);
             }
           });
@@ -14385,9 +14374,6 @@ export function toolAccessService(
     if (providedFields.length === 0)
       throw badRequest("Enter a replacement credential to reconnect this app");
 
-    // App keys belong to the saved identity grant. Verify the submitted key
-    // directly before rotating any vault version; checking health here would
-    // otherwise authenticate with the old key and could hide a bad replacement.
     let appGrant: typeof connectionGrants.$inferSelect | undefined;
     let appProviderTenant: (typeof connectionGrants.$inferSelect)["providerTenant"] = null;
     if (isGitHubAppConnection(connection)) {
@@ -17744,8 +17730,6 @@ export function toolAccessService(
       return toApplication(row);
     },
 
-    // Project configuration also exposes company-owned App repository metadata.
-    // Personal credentials still require the caller's own grant audience.
     listProjectRepositories: async (companyId: string, userId: string | null, localTrusted = false) =>
       toolAccessService(db).listGitHubRepositories(companyId, userId, localTrusted, { includeGitHubApps: true }),
 
@@ -17839,8 +17823,6 @@ export function toolAccessService(
         )
           continue;
         if (isGitHubAppConnection(connection)) {
-          // Dedicated metadata remains company-visible. Personal/shared
-          // metadata uses the same human audience as other GitHub methods.
           if (!options.includeGitHubApps || !(localTrusted || memberships.length > 0)) continue;
           if (connection.credentialPolicy !== "per_agent" && !grants.some(grant =>
             grant.connectionId === connection.id && canBrowseProjectRepositoryGrant({

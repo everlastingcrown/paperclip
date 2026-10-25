@@ -55,7 +55,6 @@ export type GitCredential = {
   identitySource?: "personal" | "dedicated";
   connectionId?: string;
   grantId?: string;
-  /** Installation credentials are renewed and authorized for each remote operation. */
   refreshPerOperation?: boolean;
 };
 
@@ -203,14 +202,6 @@ type GitCredentialSecretsDeps = {
   resolveUserSecretValue?: SecretServiceLike["resolveUserSecretValue"];
 };
 
-/**
- * Build the credential provider for one run. Resolution order: the managed GitHub identity
- * resolver, then a company secret by well-known name, then the server process environment
- * (`GITHUB_TOKEN`/`GH_TOKEN`) for self-hosted operators. A configured managed identity fails
- * closed instead of falling through to legacy credentials. Long-lived credentials are
- * memoized per provider. App installation credentials recheck authority and expiry
- * for each operation through the shared token cache.
- */
 export function createGitRemoteAuthProvider(
   db: Db,
   companyId: string,
