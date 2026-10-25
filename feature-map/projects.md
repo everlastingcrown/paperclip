@@ -42,3 +42,13 @@ Manual: Attach a small repository, save, and create a project task. Inspect the 
 - Project repository configuration and a provisioned execution workspace are different records.
 - See [workspaces](./workspaces.md), [goals](./goals.md), and [budgets](./budgets-costs.md) for those features.
 - Do not assume a deleted or archived project should erase its historical task evidence.
+
+Custom GitHub Apps (2026-10-25): the repository picker includes verified,
+explicitly configured repositories from company-owned App grants for active
+company members or the local trusted board. Personal App metadata belongs to its
+owner; shared App metadata follows its human audience. Selection stores repository
+identity and URL without granting runtime credentials or repository-content
+access. Provider-fixture coverage lives in
+[repository persistence](../../server/src/__tests__/project-repositories-persistence.test.ts);
+live App checkout remains a separate acceptance requirement.
+
