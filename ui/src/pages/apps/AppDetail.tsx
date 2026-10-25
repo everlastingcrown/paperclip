@@ -55,6 +55,7 @@ import {
 import { appTabHref, appTabLabel, isAppTabKey, type AppTabKey } from "./app-tabs";
 import { ConnectionProvenanceChip } from "./ConnectionProvenanceChip";
 import { IdentitiesSection } from "./app-detail/IdentitiesSection";
+import { GitHubAppSettings } from "./app-detail/GitHubAppSettings";
 import { PermissionsPanel } from "./app-detail/PermissionsPanel";
 import { AgentConnectionAccess } from "./app-detail/AgentConnectionAccess";
 import { ConnectedAggregatorApps } from "./app-detail/ConnectedAggregatorApps";
@@ -650,6 +651,7 @@ function StandardAppDetail({ renderActions, renderAgentSettings, renderConnectio
               {connection.config?.sourceTemplateKey === "github" && connection.config?.connectionMethodKey === "app-installation" && (
                 <section className="space-y-3" aria-label="GitHub App configuration">
                   <h2 className="text-sm font-semibold">GitHub App configuration</h2>
+                  <GitHubAppSettings config={connection.config} />
                   <p className="text-sm text-muted-foreground">
                     Reconnect to rename this connection or replace its private key. Create a new connection to change
                     the App, installation, repositories, GitHub permissions or ownership. Manage agent access and Paperclip action permissions below.
