@@ -2878,7 +2878,7 @@ function healthFailureHttpStatus(failure: {
   if (failure.code === "oauth_challenge") return 422;
   if (failure.code === "oauth_refresh_missing") return 422;
   if (failure.code === "oauth_reauthorization_required") return 422;
-  if (failure.code === "slack_mcp_access_disabled") return 422;
+  if (failure.code === "github_app_mcp_unavailable" || code === "slack_mcp_access_disabled") return 422;
   if (failure.code === "user_authorization_required") return 422;
   if (failure.code === "composio_broker_retired") return 422;
   if (failure.code === "tool_connection_transport_unsupported") return 422;
@@ -2910,7 +2910,7 @@ function sanitizeHttpFailure(error: unknown): {
     if (code === "grant_credential_invalid" || code === "oauth_insufficient_scope") {
       return { status: code === "grant_credential_invalid" ? "missing_secret" : "degraded", message: error.message, code };
     }
-    if (code === "slack_mcp_access_disabled") {
+    if (code === "github_app_mcp_unavailable" || code === "slack_mcp_access_disabled") {
       return { status: "error", message: error.message, code };
     }
     if (code === "user_authorization_required") {
@@ -7783,10 +7783,10 @@ export function toolAccessService(
         ? googleProfileValue
         : null;
     const quarantineOnRefresh =
-      (!refreshOptions.enableAllByDefault || (isRailwayEndpoint(connection.config.url) && existingRows.length > 0)) &&
+      (!refreshOptions.enableAllByDefault || ((isRailwayEndpoint(connection.config.url) || isGitHubAppConnection(connection)) && existingRows.length > 0)) &&
       (shouldQuarantineNewEntries(connection) || isGitHubAppConnection(connection)) &&
       (connection.status === "active" ||
-        (isRailwayEndpoint(connection.config.url) && existingRows.length > 0) ||
+        ((isRailwayEndpoint(connection.config.url) || isGitHubAppConnection(connection)) && existingRows.length > 0) ||
         sourceTemplateKey === "posthog" ||
         refreshOptions.quarantineManagedOAuthDraft === true);
     const safeDefault = asRecord(connection.config).safeDefault === true;
@@ -7882,12 +7882,12 @@ export function toolAccessService(
       }
     }
 
-    const normalizedConfig = isRailwayEndpoint(connection.config.url)
+    const normalizedConfig = (isRailwayEndpoint(connection.config.url) || isGitHubAppConnection(connection))
       ? { ...connection.config, quarantineNewEntries: true }
       : refreshOptions.enableAllByDefault
       ? { ...connection.config, quarantineNewEntries: false }
       : connection.config;
-    const normalizedTransportConfig = isRailwayEndpoint(connection.config.url)
+    const normalizedTransportConfig = (isRailwayEndpoint(connection.config.url) || isGitHubAppConnection(connection))
       ? { ...connection.transportConfig, quarantineNewEntries: true }
       : refreshOptions.enableAllByDefault
       ? { ...connection.transportConfig, quarantineNewEntries: false }
