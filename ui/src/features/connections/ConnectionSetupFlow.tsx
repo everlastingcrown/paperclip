@@ -1,3 +1,4 @@
+import { ConnectionCredentialInput } from "./ConnectionCredentialInput";
 import { StepHeader } from "./ConnectionSetupHeader";
 export { StepHeader } from "./ConnectionSetupHeader";
 import { ConnectionInstructionsEditor } from "./ConnectionInstructions";
@@ -998,8 +999,34 @@ function StandardConnectionSetupFlow({
     connectionMethodAcceptsCustomerOAuthClient(candidate)
     && !connectionMethodSupportsAutomaticOAuth(candidate),
   );
-  const selectedCustomOAuth = Boolean(customOAuthMethod && connectionMethodKey === customOAuthMethod.key);
-  const requestedDefinitionUsesManagedConnector = !selectedCustomOAuth && Boolean(
+  const selectedDefinitionMethod = fullRequestedDefinition?.methods.find(
+    (candidate) => candidate.key === (connectionMethodKey || requestedMethodKey),
+  );
+  const selectedIndependentMethod = Boolean(
+    selectedDefinitionMethod
+    && selectedDefinitionMethod.oauthStrategy !== "paperclip_cloud_connector"
+    && selectedDefinitionMethod.oauthStrategy !== "paperclip_id_connector",
+  );
+  const githubAppMethod = entry?.slug === "github"
+    ? connectionMethodsForCredentialSource(entry, credentialSource).find(
+        (candidate) => candidate.key === "app-installation",
+      )
+    : null;
+  const githubAppOption = githubAppMethod && !resumeConnectionId && !reconnectConnectionId ? (
+    <Button
+      type="button"
+      variant="link"
+      className="mt-4 h-auto p-0 text-xs"
+      onClick={() => {
+        setConnectionMethodKey(githubAppMethod.key);
+        setGrantKind(defaultGrantKindFor(githubAppMethod));
+        setConfigValues(defaultMethodConfig(githubAppMethod));
+      }}
+    >
+      Connect a custom GitHub App
+    </Button>
+  ) : null;
+  const requestedDefinitionUsesManagedConnector = !selectedIndependentMethod && Boolean(
     fullRequestedDefinition?.methods.some((candidate) =>
       candidate.oauthStrategy === "paperclip_cloud_connector"
       || candidate.oauthStrategy === "paperclip_id_connector"
@@ -1184,6 +1211,34 @@ function StandardConnectionSetupFlow({
       : "organization"
     : null;
   const fixedGrantKind = reconnectGrantKind ?? existingOAuthGrantKind;
+  const retainedGitHubApp = Boolean(identityConnection && connectionInstructionsConfig(identityConnection).sourceTemplateKey === "github"
+    && connectionInstructionsConfig(identityConnection).connectionMethodKey === "app-installation");
+  const retainedAppGrants = useQuery({
+    queryKey: queryKeys.tools.connectionGrants(identityConnection?.id ?? "__none__"),
+    queryFn: () => toolsApi.listConnectionGrants(identityConnection!.id),
+    enabled: !!selectedCompanyId && retainedGitHubApp,
+  });
+  const retainedAppGrant = retainedAppGrants.data?.grants.find(
+    (grant) => grant.kind === reconnectGrantKind && grant.status === "active",
+  );
+  const retainedInstalls = useQuery({
+    queryKey: ["github-app-reconnect-installs", identityConnection?.id],
+    queryFn: () => toolsApi.getConnectionInstalls(identityConnection!.id),
+    enabled: !!selectedCompanyId && retainedGitHubApp,
+  });
+  useEffect(() => {
+    if (!retainedInstalls.data || reconnectGrantKind === "agent") return;
+    const installs = retainedInstalls.data.installs;
+    setInstallChoice(installs.some(install => install.targetType === "company") ? "all" : "specific");
+    setInstallAgentIds(new Set(installs.filter(install => install.targetType === "agent").map(install => install.targetId)));
+  }, [retainedInstalls.data, reconnectGrantKind]);
+  const retainedAgentId = retainedAppGrant?.subjectAgentId;
+  useEffect(() => {
+    if (retainedAgentId) {
+      setInstallAgentIds(new Set([retainedAgentId]));
+      setInstallChoice("specific");
+    }
+  }, [retainedAgentId]);
 
   useEffect(() => {
     if (fixedGrantKind) setGrantKind(fixedGrantKind);
@@ -1289,8 +1344,16 @@ function StandardConnectionSetupFlow({
   };
 
   const effectiveGrantKind = fixedGrantKind ?? grantKind;
+  const dedicatedAgentSelectionValid = (!retainedGitHubApp || Boolean(retainedAppGrant && retainedInstalls.data))
+    && (effectiveGrantKind !== "agent" || (retainedGitHubApp ? Boolean(retainedAgentId) : installAgentIds.size === 1));
+  useEffect(() => {
+    if (effectiveGrantKind === "agent") setInstallChoice("specific");
+  }, [effectiveGrantKind]);
   const connectMutation = useMutation({
     mutationFn: async (entryOverride?: AppDefinition) => {
+      if (!dedicatedAgentSelectionValid) {
+        throw new Error("Choose exactly one agent to own this connection.");
+      }
       const connectEntry = entryOverride ?? entry;
       let result: ConnectToolAppResult;
       if (connectEntry) {
@@ -1303,7 +1366,9 @@ function StandardConnectionSetupFlow({
           ? parseGoogleSheetIds(googleSheetsLinks).ids
           : [];
         const trimmedGalleryName = galleryName.trim();
-        const connectionName = connectionNameForGrantKind(
+        const connectionName = connectEntry.slug === "github" && selectedMethod?.key === "app-installation"
+          && trimmedGalleryName && trimmedGalleryName !== connectEntry.name
+          ? trimmedGalleryName : connectionNameForGrantKind(
           trimmedGalleryName || connectEntry.name,
           requestedGrantKind,
         );
@@ -1335,7 +1400,7 @@ function StandardConnectionSetupFlow({
             ? { resumeConnectionId: resumeConnectionId ?? customerClientResumeRef.current! }
             : reconnectConnectionId ? { reconnectConnectionId } : {}),
           ...(requestedGrantKind !== "organization" ? { grantKind: requestedGrantKind } : {}),
-          ...(requestedGrantKind === "agent" ? { subjectAgentId: [...installAgentIds][0] } : {}),
+          ...(requestedGrantKind === "agent" ? { subjectAgentId: retainedAgentId ?? [...installAgentIds][0] } : {}),
         });
         customerClientResumeRef.current = null;
       } else {
@@ -1369,7 +1434,7 @@ function StandardConnectionSetupFlow({
           name: connectionName,
           applicationId: prefill.applicationId,
           ...(effectiveGrantKind !== "organization" ? { grantKind: effectiveGrantKind } : {}),
-          ...(effectiveGrantKind === "agent" ? { subjectAgentId: [...installAgentIds][0] } : {}),
+          ...(effectiveGrantKind === "agent" ? { subjectAgentId: retainedAgentId ?? [...installAgentIds][0] } : {}),
         });
       }
       // A resumable draft already owns its identity and install reach. Replacing
@@ -1382,6 +1447,7 @@ function StandardConnectionSetupFlow({
       return result;
     },
     onSuccess: (result) => {
+      setCredentials({});
       if (result.auth?.kind === "oauth") {
         setConnectResult(result);
         // The mutation saves the Access selection before this callback opens
@@ -1965,10 +2031,26 @@ function StandardConnectionSetupFlow({
   const renderConnectionDefaults = step === "key" ? (
     (extra?: ReactNode, forceOpen?: boolean) => (
     <>
+    {entry?.slug === "github" && connectionMethodKey === "app-installation" && <div className="mb-6">
+      <label className="text-sm font-medium text-foreground" htmlFor="connection-name">Connection name</label>
+      <Input
+        id="connection-name"
+        value={entry ? galleryName : linkName}
+        onChange={(event) => entry ? setGalleryName(event.target.value) : setLinkName(event.target.value)}
+        placeholder={entry?.name ?? defaultGenericMcpName(linkUrl) ?? "Custom app"}
+        maxLength={160}
+        disabled={connectMutation.isPending || oauthStartMutation.isPending}
+        className="mt-2 h-11"
+      />
+    </div>}
+    {(retainedAppGrants.isError || retainedInstalls.isError) && <InlineBanner tone="danger">
+      Couldn’t load the saved connection ownership.
+      <Button type="button" variant="link" disabled={retainedAppGrants.isFetching} onClick={() => { void retainedAppGrants.refetch(); void retainedInstalls.refetch(); }}>Try again</Button>
+    </InlineBanner>}
     <ConnectionAccessDefaults
       key="connection-defaults"
       extra={extra}
-      forceOpen={forceOpen}
+      forceOpen={forceOpen || !dedicatedAgentSelectionValid}
       companyId={selectedCompanyId}
       sentence={connectionDefaultSummarySentence({
         grantKind: effectiveGrantKind,
@@ -1976,7 +2058,7 @@ function StandardConnectionSetupFlow({
         installChoice,
         installCount: installAgentIds.size,
         lockedAgentId: requestedAgentId ?? null,
-        preserveAgentAccess: Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection)),
+        preserveAgentAccess: retainedGitHubApp || Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection)),
       })}
       notice={[
         galleryQuery.data?.capabilities?.canCreateOrganizationGrant === false
@@ -2001,8 +2083,8 @@ function StandardConnectionSetupFlow({
       capabilities={galleryQuery.data?.capabilities}
       githubIdentity={entry?.slug === "github"}
       identityLoading={Boolean(automaticOAuthEntry) && directOAuthLookupPending}
-      preserveAgentAccess={Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection))}
-      disabled={connectMutation.isPending || oauthStartMutation.isPending}
+      preserveAgentAccess={retainedGitHubApp || Boolean((automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection)))}
+      disabled={connectMutation.isPending || oauthStartMutation.isPending || retainedGitHubApp}
     />
     {entry && instructionTemplate && instructionValue && <div className="mt-6"><ConnectionInstructionsEditor provider={entry.name} template={instructionTemplate} value={instructionValue} onChange={(value) => setInstructionDraft({ slug: entry.slug, value })} disabled={connectMutation.isPending || oauthStartMutation.isPending} /></div>}
     {additionalSettings && <div className="mt-6">{additionalSettings}</div>}
@@ -2337,6 +2419,7 @@ function StandardConnectionSetupFlow({
           <p className="mt-2 text-sm text-muted-foreground">
             This instance is connected to Paperclip, but {entry.name} sign-in is not currently available. Try again shortly or contact your instance administrator.
           </p>
+          {githubAppOption}
           {customOAuthMethod ? (
             <Button type="button" variant="link" className="mt-4 h-auto p-0 text-xs" onClick={() => setConnectionMethodKey(customOAuthMethod.key)}>
               Use your own {entry.name} OAuth app
@@ -2362,11 +2445,14 @@ function StandardConnectionSetupFlow({
                   Connect with Paperclip
                 </h2>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  You must connect this instance to Paperclip to connect to {entry.name} (you only need to do this once).
+                  {entry.slug === "github"
+                    ? "Connect this instance to Paperclip to use managed GitHub sign-in (you only need to do this once)."
+                    : `You must connect this instance to Paperclip to connect to ${entry.name} (you only need to do this once).`}
                 </p>
               </div>
             </div>
 
+            {githubAppOption}
             {customOAuthMethod ? (
               <Button type="button" variant="link" className="mt-4 h-auto p-0 text-xs" onClick={() => setConnectionMethodKey(customOAuthMethod.key)}>
                 Use your own {entry.name} OAuth app
@@ -2414,7 +2500,7 @@ function StandardConnectionSetupFlow({
         </div>
       ) : step === "key" && entry && credentialStep !== undefined ? credentialStep : step === "key" && entry ? (
         <KeyStep
-          settingsValid={additionalSettingsValid && instructionsValid}
+          settingsValid={additionalSettingsValid && instructionsValid && dedicatedAgentSelectionValid}
           entry={entry}
           error={connectMutation.isError ? (connectMutation.error instanceof Error ? connectMutation.error.message : "Please check your key and try again.") : null}
           values={credentials}
@@ -2450,6 +2536,10 @@ function StandardConnectionSetupFlow({
             setVercelConnector("");
             setConfigValues(defaultMethodConfig(nextMethod));
           }}
+          savedCredentialPaths={identityConnection && connectionMethodKey === connectionInstructionsConfig(identityConnection).connectionMethodKey
+            ? retainedAppGrant?.credentialSecretRefs.map((ref) => ref.configPath)
+            : undefined}
+          fixedGitHubApp={retainedGitHubApp}
           configValues={configValues}
           onConfigChange={setConfigValues}
           googleSheetsLinks={googleSheetsLinks}
@@ -3402,6 +3492,8 @@ function KeyStep({
   methodKey,
   onMethodChange,
   configValues,
+  fixedGitHubApp = false,
+  savedCredentialPaths = [],
   onConfigChange,
   googleSheetsLinks,
   googleSheetsError,
@@ -3432,6 +3524,8 @@ function KeyStep({
   methodKey: string;
   onMethodChange: (method: ConnectionMethodDef | null) => void;
   configValues: Record<string, string | boolean>;
+  fixedGitHubApp?: boolean;
+  savedCredentialPaths?: string[];
   onConfigChange: (next: Record<string, string | boolean>) => void;
   googleSheetsLinks: string;
   googleSheetsError: string | null;
@@ -3505,7 +3599,7 @@ function KeyStep({
   const vercelReview = method?.credentialSources?.vercelConnect ?? null;
   const usingVercel = credentialSource === "vercel_connect";
   const allFilled = usingVercel || fields.every(
-    (f) => f.required === false || (values[f.configPath]?.trim().length ?? 0) > 0,
+    (f) => f.required === false || savedCredentialPaths.includes(f.configPath) || (values[f.configPath]?.trim().length ?? 0) > 0,
   );
   const acceptsCustomerOAuthClient = connectionMethodAcceptsCustomerOAuthClient(method);
   const customerOAuthClientRequired = acceptsCustomerOAuthClient
@@ -3519,10 +3613,14 @@ function KeyStep({
     ? oauthCallbackUrlForBrowser()
     : null;
   const allConfigFields = [...(method?.tenantFields ?? []), ...(method?.extensionFields ?? [])];
-  const configFields = allConfigFields.filter((field) => !field.hidden);
+  const githubAppMethod = entry.slug === "github" && method?.key === "app-installation";
+  const visibleConfigFields = allConfigFields.filter((field) =>
+    !githubAppMethod || field.key !== "customPermissions" || configValues.permissionProfile === "custom",
+  ).map((field) => githubAppMethod && field.key === "customPermissions" ? { ...field, required: true } : field);
+  const configFields = visibleConfigFields.filter((field) => !field.hidden);
   const standardConfigFields = configFields.filter((field) => field.advanced !== true);
   const advancedConfigFields = configFields.filter((field) => field.advanced === true);
-  const configFilled = allConfigFields.every((field) => {
+  const configFilled = visibleConfigFields.every((field) => {
     if (!field.required) return true;
     const value = configValues[field.key];
     return typeof value === "boolean" || (typeof value === "string" && value.trim().length > 0);
@@ -3606,9 +3704,9 @@ function KeyStep({
       {!method && <p className="mt-2 text-xs text-muted-foreground">Choose a connection method to continue.</p>}
     </div>
   ) : null;
-  const hasAdvancedSettings = advancedConfigFields.length > 0
+  const hasAdvancedSettings = !fixedGitHubApp && (advancedConfigFields.length > 0
     || optionalCustomerOAuthClient
-    || hasAlternateMethods;
+    || hasAlternateMethods);
   // Keep the disclosure open when what is inside it is load-bearing right now:
   // a non-default method in use, or a selection the connector still needs.
   const forceAdvancedOpen = usingCustomOAuth || !hasMethodSelection;
@@ -3708,14 +3806,25 @@ function KeyStep({
   return (
     <div className="mx-auto max-w-xl">
       {requirementsUrl ? (
-        <div className="mb-4 flex justify-end">
+        <div className="mb-4 flex justify-end gap-4">
+          {githubAppMethod && !fixedGitHubApp && method?.consoleLinks?.register ? (
+            <a
+              href={method.consoleLinks.register}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              Create an App on GitHub
+              <ArrowUpRight className="h-3 w-3" />
+            </a>
+          ) : null}
           <a
             href={requirementsUrl}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
           >
-            Review requirements
+            {githubAppMethod ? "GitHub App setup guide" : "Review requirements"}
             <ArrowUpRight className="h-3 w-3" />
           </a>
         </div>
@@ -3768,15 +3877,18 @@ function KeyStep({
 
         {error ? <div role="alert"><InlineBanner tone="danger">{error}</InlineBanner></div> : null}
 
-        {standardConfigFields.map((field) => (
-          <MethodConfigField
-            key={field.key}
-            field={field}
-            value={configValues[field.key]}
-            onChange={(value) => onConfigChange({ ...configValues, [field.key]: value })}
-          />
-        ))}
-
+        {savedCredentialPaths.length > 0 ? <p className="text-sm text-muted-foreground">Leave the key blank to keep the saved credential, or paste a replacement.</p> : null}
+        {fixedGitHubApp ? <p className="text-sm text-muted-foreground">You can rename this connection or replace its private key. App, installation, repositories, GitHub permissions and ownership are fixed. Manage agent access on the Permissions page.</p> : null}
+        <fieldset disabled={fixedGitHubApp} className="space-y-6">
+          {standardConfigFields.map((field) => (
+            <MethodConfigField
+              key={field.key}
+              field={field}
+              value={configValues[field.key]}
+              onChange={(value) => onConfigChange({ ...configValues, [field.key]: value })}
+            />
+          ))}
+        </fieldset>
 
         {!usingVercel && method?.auth === "oauth" && customerOAuthClientRequired ? (
           <div id={customOAuthFieldsId} role="region" aria-label="Your OAuth app">
@@ -3799,12 +3911,13 @@ function KeyStep({
               <label className="text-sm font-medium text-foreground">
                 {credentialFieldLabel(entry.name, field.label, fields.length)}
               </label>
-              <Input
+              <ConnectionCredentialInput
+                configPath={field.configPath}
                 type={field.type === "text" && field.secret === false ? "text" : "password"}
                 aria-label={credentialFieldLabel(entry.name, field.label, fields.length)}
                 autoComplete="off"
                 value={values[field.configPath] ?? ""}
-                onChange={(e) => onChange({ ...values, [field.configPath]: e.target.value })}
+                onChange={(value) => onChange({ ...values, [field.configPath]: value })}
                 placeholder={field.type === "text" && field.secret === false ? field.placeholder : "••••••••••••••••"}
                 className="mt-2 h-11 font-mono"
               />
@@ -3990,6 +4103,7 @@ function MethodConfigField({
       <label className="text-sm font-medium text-foreground">{field.label}</label>
       {field.type === "textarea" ? (
         <Textarea
+          aria-label={field.label}
           value={typeof value === "string" ? value : ""}
           onChange={(event) => onChange(event.target.value)}
           placeholder={field.placeholder}
@@ -3997,6 +4111,7 @@ function MethodConfigField({
         />
       ) : field.type === "select" ? (
         <select
+          aria-label={field.label}
           value={typeof value === "string" ? value : ""}
           onChange={(event) => onChange(event.target.value)}
           className="mt-2 h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
@@ -4289,7 +4404,7 @@ export function AccessStepContent({
                 ]}
               />
             )}
-            {!preserveAgentAccess && !lockedAgentId && installChoice === "specific" ? (
+            {!preserveAgentAccess && !lockedAgentId && (grantKind === "agent" || installChoice === "specific") ? (
               <div className="mt-3">
                 <AgentMultiSelect
                   agents={agents}

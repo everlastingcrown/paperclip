@@ -1,3 +1,5 @@
+import { GITHUB_APP_MCP_URL } from "./github-app-client.js";
+import { sanitizeGitHubAppFailure } from "./github-app-client.js";
 import { AGGREGATOR_NAMES, isAppAggregator, type AggregatorAppsResponse, type ArcadeDiscoverySetupInput } from "@paperclipai/shared/aggregator-apps";
 import { resolveAggregatorApp, type AppCatalogAggregator } from "@paperclipai/shared/aggregator-app-catalog";
 import { AggregatorDiscoveryUnavailableError, discoverArcadeApps, discoverExecutorApps, type DiscoveredApp } from "./aggregator-app-discovery.js";
@@ -5,6 +7,8 @@ import { COMPOSIO_APP_TOOLKITS, findComposioCatalogApp } from "@paperclipai/shar
 import type { ComposioAppAccount, ComposioAppAccountInput, ComposioAppSetupInput, ComposioAppSetupResult, ComposioAppSnapshot, ComposioAppsResponse } from "@paperclipai/shared";
 import { composioAppAccounts, composioAppSetupResult } from "./composio-app-setup.js";
 import { honchoManagedArguments } from "./honcho-connection.js";
+import { getGitHubAppGrant, isGitHubAppConnection, parseGitHubAppConfig, refreshGitHubAppAccess } from "./github-app-credentials.js";
+import { createGitHubAppClient, GITHUB_APP_KEY_PATH } from "./github-app-client.js";
 import { defaultConnectionAgentInstructions } from "@paperclipai/shared";
 import { isInsufficientConnectionScope, INSUFFICIENT_CONNECTION_SCOPE_MESSAGE } from "./connection-permission-errors.js";
 import { ASANA_CONNECTOR_SCOPES, isAsanaConnectorProfileId, type AsanaConnectorProfileId } from "@paperclipai/shared";
@@ -1097,7 +1101,9 @@ export function normalizeConnectionMethodConfig(
 
   const values: Record<string, string | boolean> = {};
   for (const field of fields) {
-    const raw = configValues?.[field.key] ?? field.defaultValue;
+    let raw = configValues?.[field.key] ?? field.defaultValue;
+    // API callers may use a numeric schema version; persist the catalog form representation.
+    if (method.credentialExchange === "github_app_installation" && field.key === "version" && raw === 1) raw = "1";
     if (field.type === "checkbox") {
       if (raw !== undefined && typeof raw !== "boolean")
         throw badRequest(`${field.label} must be true or false`);
@@ -1221,12 +1227,14 @@ export function projectedConnectionHeaders(
     }
   }
   if (
-    connection.transport === "mcp_remote" &&
+    (connection.transport === "mcp_remote" || isGitHubAppConnection(connection)) &&
     (sourceTemplateKey === "github" || connection.transportConfig?.sourceTemplateKey === "github")
   ) {
     // GitHub excludes Actions from its default catalog. Project this on every
     // discovery and invocation so existing connections gain the toolset too.
     headers["X-MCP-Toolsets"] = "default,actions";
+    // Installation tokens represent a bot, not a user; GET /user is unsupported.
+    if (isGitHubAppConnection(connection)) headers["X-MCP-Exclude-Tools"] = "get_me";
   }
   return headers;
 }
@@ -2863,7 +2871,9 @@ function isOAuthEndpointRejection(error: unknown): boolean {
 function healthFailureHttpStatus(failure: {
   status: ToolConnectionHealthStatus;
   code: string;
+  reason?: string;
 }): number {
+  if (failure.code === "github_app_access_unavailable") return failure.reason === "network" ? 502 : 422;
   if (failure.status === "missing_secret") return 422;
   if (failure.code === "oauth_challenge") return 422;
   if (failure.code === "oauth_refresh_missing") return 422;
@@ -2888,7 +2898,10 @@ function sanitizeHttpFailure(error: unknown): {
   status: ToolConnectionHealthStatus;
   message: string;
   code: string;
+  reason?: string;
 } {
+  const appFailure = sanitizeGitHubAppFailure(error);
+  if (appFailure) return { status: "error", ...appFailure };
   if (error instanceof HttpError) {
     const code = asRecord(error.details).code;
     if (code === "cognee_access_unverified" || code === "memory_api_key_rejected") {
@@ -3065,6 +3078,9 @@ export function toolAccessService(
     connection: typeof toolConnections.$inferSelect,
     actor?: ActorInfo,
   ): Promise<string> {
+    // Saved App connections may still carry the original REST endpoint. Never
+    // send an installation token or PEM to an operator-selected MCP server.
+    if (isGitHubAppConnection(connection)) return GITHUB_APP_MCP_URL;
     const publicEndpoint = remoteEndpoint(connection.config);
     const ref = connection.credentialRefs.find(
       (candidate) => candidate.placement === "url",
@@ -6917,6 +6933,10 @@ export function toolAccessService(
     actor?: ActorInfo,
     options: { forceRefresh?: boolean } = {},
   ): Promise<Record<string, string>> {
+    if (isGitHubAppConnection(connection)) {
+      const credential = await refreshGitHubAppAccess(db, connection, options.forceRefresh);
+      return { Authorization: `Bearer ${credential.token}` };
+    }
     if (connection.credentialSource === "vercel_connect") {
       const grant = await vercelGrantForConnection(connection, actor);
       return resolveVercelCredentialHeaders(connection, grant, options);
@@ -7144,6 +7164,16 @@ export function toolAccessService(
       await response.body?.cancel().catch(() => undefined);
       throw unprocessable(INSUFFICIENT_CONNECTION_SCOPE_MESSAGE, { code: "oauth_insufficient_scope", connectionId: connection.id });
     }
+    if (response.status === 401 && isGitHubAppConnection(connection)) {
+      await response.body?.cancel().catch(() => undefined);
+      // Discovery is read-only. Retry once with a freshly scoped installation
+      // token; never fall back to a user, another App or an OAuth sign-in.
+      headers = {
+        ...projectedConnectionHeaders(connection),
+        ...(await resolveCredentialHeaders(connection, actor, { forceRefresh: true })),
+      };
+      response = await sendToolsList(headers);
+    }
     if (
       response.status === 401 &&
       connection.credentialSource === "vercel_connect"
@@ -7197,6 +7227,10 @@ export function toolAccessService(
       }
     }
     if (!response.ok) {
+      // An App token failure must never convert this bot connection to OAuth.
+      if (isGitHubAppConnection(connection)) throw new HttpError(502,
+        "GitHub MCP access is unavailable. Check the installation permissions and network access to api.githubcopilot.com.",
+        { code: "github_app_mcp_unavailable", status: response.status });
       if ((response.status === 401 || response.status === 403)
         && connection.authKind === "api_key" && isMemoryConnectorId(connection.config.sourceTemplateKey)) {
         throw unprocessable("The provider rejected this API key. Check the key and its account access, then try again.", { code: "memory_api_key_rejected" });
@@ -7281,6 +7315,7 @@ export function toolAccessService(
       response = await sendToolsList(sessionHeaders, cursor);
       if (!response.ok) throw new HttpError(502, "Remote MCP catalog page could not be read", { status: response.status });
     }
+    if (isGitHubAppConnection(connection)) return descriptors.filter(tool => tool.name !== "get_me");
     if (!isRailwayConnection(connection)) return descriptors;
     if (descriptors.some((tool) => normalizeRailwayToolName(tool.name).startsWith(RAILWAY_TOOL_PREFIX))) {
       throw unprocessable("Railway advertised a reserved Paperclip action name. Refresh is blocked pending review.", { code: "railway_tool_name_collision" });
@@ -7398,6 +7433,7 @@ export function toolAccessService(
   ): Promise<McpToolDescriptor[]> {
     assertSupportedConnection(connection);
     if (connection.connectionPurpose === "ai") throw unprocessable("AI connections provide runtime authentication, not tool actions");
+    if (isGitHubAppConnection(connection)) return remoteTools(connection, undefined, actor);
     if (isBrowserUseConnection(connection)) {
       const headers = credentialHeaders ?? await resolveCredentialHeaders(connection, actor);
       await browserUseClient(headers, (url, init) => requestRemoteHttpEndpoint(new URL(url), init), connection.id).probe();
@@ -7516,7 +7552,13 @@ export function toolAccessService(
       assertSupportedConnection(connection);
       const config = asRecord(connection.config);
       const oauth = asRecord(config.oauth);
-      if (
+      if (isGitHubAppConnection(connection)) {
+        const credential = await refreshGitHubAppAccess(db, connection, true);
+        await remoteTools(connection, {
+          ...projectedConnectionHeaders(connection),
+          Authorization: `Bearer ${credential.token}`,
+        }, actor);
+      } else if (
         config.sourceTemplateKey === "github" &&
         oauth.connectorProfile === "github.code"
       ) {
@@ -7584,7 +7626,7 @@ export function toolAccessService(
       const updated = await updateConnectionHealth(
         connection,
         "ok",
-        config.sourceTemplateKey === "github" &&
+        isGitHubAppConnection(connection) ? "GitHub App MCP, Git and gh access is available." : config.sourceTemplateKey === "github" &&
           oauth.connectorProfile === "github.code"
           ? "GitHub account, installation, and repository access are available."
           : isBrowserUseConnection(connection)
@@ -7628,10 +7670,11 @@ export function toolAccessService(
         outcome: "failure",
         reasonCode: failure.code,
         actor,
-        details: { status: failure.status, transport: connection.transport },
+        details: { status: failure.status, transport: connection.transport, ...(failure.reason ? { reason: failure.reason } : {}) },
       });
       throw new HttpError(healthFailureHttpStatus(failure), failure.message, {
         code: failure.code,
+        ...(failure.reason ? { reason: failure.reason } : {}),
         connection: toConnection(updated),
         runtimeSlot,
         setupUrl: connectionSetupUrl(connection),
@@ -7680,11 +7723,12 @@ export function toolAccessService(
         action: "tool_connection.catalog_refresh",
         outcome: "failure",
         reasonCode: failure.code,
-        details: { status: failure.status },
+        details: { status: failure.status, ...(failure.reason ? { reason: failure.reason } : {}) },
         actor,
       });
       throw new HttpError(healthFailureHttpStatus(failure), failure.message, {
         code: failure.code,
+        ...(failure.reason ? { reason: failure.reason } : {}),
         setupUrl: connectionSetupUrl(connection),
         reconnectUrl: connectionReconnectUrl(connection),
       });
@@ -7697,7 +7741,7 @@ export function toolAccessService(
     const existingByName = new Map(
       existingRows.map((entry) => [entry.toolName, entry]),
     );
-    if (isRemoteMcpConnectorMethod(connection.config.sourceTemplateKey, connection.config.connectionMethodKey)) {
+    if (isGitHubAppConnection(connection) || isRemoteMcpConnectorMethod(connection.config.sourceTemplateKey, connection.config.connectionMethodKey)) {
       const discoveredNames = new Set(descriptors.map((descriptor) => descriptor.name));
       const removedIds = existingRows.filter((entry) => !discoveredNames.has(entry.toolName) && entry.status !== "disabled").map((entry) => entry.id);
       if (removedIds.length) await db.update(toolCatalogEntries)
@@ -7740,7 +7784,7 @@ export function toolAccessService(
         : null;
     const quarantineOnRefresh =
       (!refreshOptions.enableAllByDefault || (isRailwayEndpoint(connection.config.url) && existingRows.length > 0)) &&
-      shouldQuarantineNewEntries(connection) &&
+      (shouldQuarantineNewEntries(connection) || isGitHubAppConnection(connection)) &&
       (connection.status === "active" ||
         (isRailwayEndpoint(connection.config.url) && existingRows.length > 0) ||
         sourceTemplateKey === "posthog" ||
@@ -12328,9 +12372,27 @@ export function toolAccessService(
             .orderBy(desc(toolConnections.updatedAt))
             .limit(1)
         : [undefined];
-    const retainedConnection = requestedResumeConnection ?? recoveredConnection;
+    let retainedConnection = requestedResumeConnection ?? (recoveredConnection && isGitHubAppConnection(recoveredConnection) ? undefined : recoveredConnection);
+    const transport = method?.transport ?? "mcp_remote";
+    const applicationType = transport === "rest_api" ? "rest_api"
+      : transport === "mcp_remote" ? "mcp_http"
+        : transport === "local_stdio" ? "mcp_stdio" : null;
+    if ((retainedConnection && retainedConnection.transport !== transport)
+      || (existingApplication && applicationType && existingApplication.type !== applicationType)) {
+      if (requestedResumeConnection || input.applicationId) {
+        throw conflict("Create a separate app connection to change its connection method transport.", {
+          code: "connection_transport_change_not_supported",
+        });
+      }
+      // A new gallery connection may use another transport for the same app.
+      // Do not revive an archived MCP identity as REST (or the reverse): the
+      // application's type and any sibling connections belong to that identity.
+      retainedConnection = undefined;
+      existingApplication = null;
+    }
     let applicationName = existingApplication?.name ?? requestedName;
-    let name = retainedConnection?.name ?? requestedName;
+    let name = (retainedConnection && isGitHubAppConnection(retainedConnection) ? input.name : undefined)
+      ?? retainedConnection?.name ?? requestedName;
     if (!existingApplication) {
       const applicationNames = await db
         .select({ name: toolApplications.name })
@@ -12458,7 +12520,6 @@ export function toolAccessService(
           "Dedicated GitHub identity requires an agent in this company",
         );
     }
-    const transport = method?.transport ?? "mcp_remote";
     const credentialSource: ToolConnectionCredentialSource =
       input.credentialSource ?? "paperclip_vault";
     if (
@@ -12581,6 +12642,15 @@ export function toolAccessService(
       isGoogleSheetsRobotMethod || !method
         ? null
         : normalizeConnectionMethodConfig(method, input.configValues ?? asRecord(asRecord(retainedConnection?.config).methodConfig));
+    if (galleryEntry?.slug === "github" && method?.key === "app-installation") {
+      const parsed = parseGitHubAppConfig(normalizedMethodConfig?.values);
+      // Name-based recovery may retain an archived OAuth/PAT connection, whose
+      // settings are not an App policy. Only existing App connections pin it.
+      if (retainedConnection && isGitHubAppConnection(retainedConnection)
+        && JSON.stringify(parsed) !== JSON.stringify(parseGitHubAppConfig(asRecord(retainedConnection.config).methodConfig))) {
+        throw badRequest("Reconnect preserves the App, installation and access policy. Create a new connection to change them.");
+      }
+    }
     const remoteUrlCredential =
       transport === "mcp_remote" && input.link
         ? splitRemoteUrlCredential(input.link)
@@ -12606,7 +12676,7 @@ export function toolAccessService(
           // Grant-backed setup keeps the full discovered catalog selectable;
           // the wizard projects the app's action defaults into policies at
           // finish time instead of using catalog quarantine as access state.
-          quarantineNewEntries: galleryEntry.slug === "railway",
+          quarantineNewEntries: method?.credentialExchange === "github_app_installation" || galleryEntry.slug === "railway",
           ...(remoteMcpConnector ? {
             mcpSessionRequired: true,
             mcpAuthMode: input.authMode ?? "auto",
@@ -12675,6 +12745,10 @@ export function toolAccessService(
     assertLocalStdioCanBeEnabled(transport, false);
 
     const credentialValues = input.credentialValues ?? {};
+    if (galleryEntry?.slug === "github" && method?.key === "app-installation"
+      && (credentialValues["credentials.privateKey"]?.length ?? 0) > 64 * 1024) {
+      throw badRequest("The GitHub App private key is too large.");
+    }
     // A curated method declares its auth kind. A pasted URL declares one only
     // under Advanced authentication; on the simple path it starts from what the
     // operator supplied and is upgraded to `oauth` when discovery proves the
@@ -12734,8 +12808,15 @@ export function toolAccessService(
       retainedMethodKey === method?.key &&
       (!remoteMcpConnector || (baseConfig.url === retainedConfig.url && genericAuthKind === retainedConnection.authKind)),
     );
+    const retainedAppGrant = canRetainCredentialMaterial && retainedConnection && isGitHubAppConnection(retainedConnection)
+      ? await getGitHubAppGrant(db, retainedConnection)
+      : undefined;
+    if (retainedConnection && isGitHubAppConnection(retainedConnection) && (!retainedAppGrant || method?.key !== "app-installation"
+      || (retainedAppGrant.kind === "agent" && retainedAppGrant.subjectAgentId !== dedicatedAgentId))) {
+      throw badRequest("Reconnect must preserve the GitHub App ownership and method.");
+    }
     const retainedCredentialSecretRefs = canRetainCredentialMaterial
-      ? (retainedPersonalIdentity?.grant?.credentialSecretRefs ??
+      ? (retainedAppGrant?.credentialSecretRefs ?? retainedPersonalIdentity?.grant?.credentialSecretRefs ??
         retainedConnection?.credentialSecretRefs ??
         [])
       : [];
@@ -13142,8 +13223,21 @@ export function toolAccessService(
           });
         }
       } else if (dedicatedAgentId) {
-        // Managed OAuth creates the credential-bearing grant in the callback.
-        // Keep the connection free of organization secrets from the outset.
+        if (isGitHubAppConnection(connectionRow)) {
+          const [previous] = await db.select().from(connectionGrants).where(and(
+            eq(connectionGrants.companyId, companyId), eq(connectionGrants.connectionId, connectionRow.id),
+            eq(connectionGrants.kind, "agent"), eq(connectionGrants.subjectAgentId, dedicatedAgentId),
+          ));
+          const values = { credentialSecretRefs, status: "active" as const, revokedAt: null, updatedAt: now() };
+          const [current] = previous
+            ? await db.update(connectionGrants).set(values).where(eq(connectionGrants.id, previous.id)).returning()
+            : await db.insert(connectionGrants).values({ ...values, companyId, connectionId: connectionRow.id,
+                kind: "agent", subjectAgentId: dedicatedAgentId, isDefault: false,
+                createdByUserId: actor?.actorType === "user" ? actor.actorId : null }).returning();
+          if (revivedConnectionPrevious) revivedGrantMutation = { previous: previous ?? null, current: current! };
+          await audit({ companyId, connectionId: connectionRow.id, action: previous ? "connection_grant.updated" : "connection_grant.created",
+            outcome: "success", actor, details: { kind: "agent", subjectAgentId: dedicatedAgentId } });
+        }
       } else {
         const organizationGrant = await ensureDefaultOrganizationGrant(
           connectionRow,
@@ -13376,7 +13470,9 @@ export function toolAccessService(
         connection: refresh.connection,
         catalog: refresh.catalog,
         actions: groupedActions(refresh.catalog),
-        suggestedDefaults: galleryEntry
+        suggestedDefaults: dedicatedAgentId
+          ? { ...recommendedDefaultsForApp(galleryEntry!, method?.key), access: { agentIds: [dedicatedAgentId] } }
+          : galleryEntry
           ? recommendedDefaultsForApp(galleryEntry, method?.key)
           : {
               access: "all_agents",
@@ -13717,6 +13813,16 @@ export function toolAccessService(
     const connection = await getConnectionRow(connectionId, companyId);
     if (connection.status === "archived")
       throw conflict("Archived app connections cannot be finished");
+    if (isGitHubAppConnection(connection)) {
+      const grant = await getGitHubAppGrant(db, connection);
+      if ((grant.kind === "agent" && (input.access === "all_agents" || input.access.agentIds.length !== 1
+          || input.access.agentIds[0] !== grant.subjectAgentId))
+        ) {
+        throw badRequest("Dedicated GitHub App identities require their assigned agent.");
+      }
+      await refreshGitHubAppAccess(db, connection);
+    }
+
     if (connection.config.mcpPreserveAccess === true && isRemoteMcpConnectorMethod(connection.config.sourceTemplateKey, connection.config.connectionMethodKey)) {
       const [profile] = await db.select().from(toolProfiles).where(and(
         eq(toolProfiles.companyId, companyId), eq(toolProfiles.profileKey, `app:${connection.id}`),
@@ -13979,7 +14085,7 @@ export function toolAccessService(
       const profileBindings: ToolProfileBinding[] = [];
       // These connectors expose one agent-access choice. Commit installation
       // reach and permission bindings together, including an empty selection.
-      if (isRemoteMcpConnectorMethod(connection.config.sourceTemplateKey, connection.config.connectionMethodKey)) {
+      if (isGitHubAppConnection(connection) || isRemoteMcpConnectorMethod(connection.config.sourceTemplateKey, connection.config.connectionMethodKey)) {
         const existingInstalls = await tx.select().from(toolConnectionInstalls).where(and(
           eq(toolConnectionInstalls.companyId, companyId), eq(toolConnectionInstalls.connectionId, connection.id),
         ));
@@ -14256,13 +14362,28 @@ export function toolAccessService(
     if (providedFields.length === 0)
       throw badRequest("Enter a replacement credential to reconnect this app");
 
+    // App keys belong to the saved identity grant. Verify the submitted key
+    // directly before rotating any vault version; checking health here would
+    // otherwise authenticate with the old key and could hide a bad replacement.
+    let appGrant: typeof connectionGrants.$inferSelect | undefined;
+    let appProviderTenant: (typeof connectionGrants.$inferSelect)["providerTenant"] = null;
+    if (isGitHubAppConnection(connection)) {
+      appGrant = await getGitHubAppGrant(db, connection);
+      const key = input.credentialValues[GITHUB_APP_KEY_PATH]?.trim();
+      if (!key) throw badRequest("Enter a replacement GitHub App private key");
+      const verified = await createGitHubAppClient().acquire(
+        `${companyId}:${connection.id}:${appGrant.id}:replacement`,
+        parseGitHubAppConfig(connection.config.methodConfig), key, true,
+      );
+      appProviderTenant = { github: verified.github };
+    }
     const personalIdentity = await fixedPersonalIdentityForReconnect(
       connection,
       undefined,
       actor,
     );
     const credentialSecretRefs = [
-      ...(personalIdentity?.grant?.credentialSecretRefs ??
+      ...(appGrant?.credentialSecretRefs ?? personalIdentity?.grant?.credentialSecretRefs ??
         connection.credentialSecretRefs),
     ];
     const credentialRefs: McpConnectionCredentialRef[] = [
@@ -14270,6 +14391,29 @@ export function toolAccessService(
     ];
 
     const updated = await db.transaction(async (tx) => {
+      await tx.select({ id: connectionGrants.id }).from(connectionGrants)
+        .where(and(eq(connectionGrants.companyId, companyId), eq(connectionGrants.connectionId, connection.id)))
+        .orderBy(connectionGrants.id).for("update");
+      await tx.select({ id: toolApplications.id }).from(toolApplications)
+        .where(and(eq(toolApplications.id, connection.applicationId), eq(toolApplications.companyId, companyId)))
+        .for("update");
+      await tx.select({ id: toolConnections.id }).from(toolConnections)
+        .where(and(eq(toolConnections.id, connection.id), eq(toolConnections.companyId, companyId)))
+        .for("update");
+      if (appGrant) {
+        const [currentConnection] = await tx.select().from(toolConnections).where(and(
+          eq(toolConnections.companyId, companyId), eq(toolConnections.id, connection.id),
+        ));
+        const [currentGrant] = await tx.select().from(connectionGrants).where(and(
+          eq(connectionGrants.companyId, companyId), eq(connectionGrants.id, appGrant.id),
+        ));
+        if (!currentConnection || !currentGrant
+          || currentConnection.updatedAt.getTime() !== connection.updatedAt.getTime()
+          || currentGrant.updatedAt.getTime() !== appGrant.updatedAt.getTime()
+          || currentGrant.status !== "active") {
+          throw conflict("The GitHub App identity changed during key verification. Please try again.");
+        }
+      }
       for (const field of providedFields) {
         const value = input.credentialValues[field.configPath]!.trim();
         if (field.placement === "url" && !remoteUrlCredentialMatchesPublicUrl(String(connection.config.url ?? ""), value)) {
@@ -14309,6 +14453,19 @@ export function toolAccessService(
       }
 
       const updatedAt = new Date();
+      if (appGrant) {
+        await tx.update(connectionGrants).set({
+          credentialSecretRefs, providerTenant: appProviderTenant, updatedAt,
+        }).where(and(eq(connectionGrants.companyId, companyId), eq(connectionGrants.id, appGrant.id)));
+        const binding = actorBinding(actor);
+        await tx.insert(toolAccessAuditEvents).values({
+          companyId, connectionId: connection.id,
+          actorType: binding.actorType ?? "system", actorId: binding.actorId,
+          action: "connection_grant.updated", outcome: "success",
+          reasonCode: "github_app_identity_reconnected",
+          details: { kind: appGrant.kind, subjectAgentId: appGrant.subjectAgentId, subjectUserId: appGrant.subjectUserId },
+        });
+      }
       if (personalIdentity) {
         const grantValues = {
           credentialSecretRefs,
@@ -14338,10 +14495,10 @@ export function toolAccessService(
       const [nextConnection] = await tx
         .update(toolConnections)
         .set({
-          credentialRefs,
+          credentialRefs: appGrant ? [] : credentialRefs,
           // Personal reconnect rotates the existing user's grant. The
           // connection-level organization slot stays exactly as it was.
-          credentialSecretRefs: personalIdentity
+          credentialSecretRefs: appGrant && appGrant.kind !== "organization" ? [] : personalIdentity
             ? connection.credentialSecretRefs
             : credentialSecretRefs,
           lastError: null,
@@ -14350,7 +14507,7 @@ export function toolAccessService(
         .where(eq(toolConnections.id, connection.id))
         .returning();
       await syncConnectionCredentialBindings(tx, nextConnection,
-        personalIdentity ? credentialSecretRefs : []);
+        personalIdentity || appGrant ? credentialSecretRefs : []);
       return nextConnection;
     });
     const health = await checkConnectionHealth(updated.id, actor);
@@ -17563,10 +17720,10 @@ export function toolAccessService(
       return toApplication(row);
     },
 
-    // Repository discovery uses credential audiences, not connection-management
-    // visibility. An administrator cannot browse another user's private repos.
+    // Project configuration also exposes company-owned App repository metadata.
+    // Personal credentials still require the caller's own grant audience.
     listProjectRepositories: async (companyId: string, userId: string | null, localTrusted = false) =>
-      toolAccessService(db).listGitHubRepositories(companyId, userId, localTrusted),
+      toolAccessService(db).listGitHubRepositories(companyId, userId, localTrusted, { includeGitHubApps: true }),
 
     // Return identifiers, never credentials, so each attempted read can recheck its grant.
     githubReadConnectionIds: async (companyId: string, userId: string | null, localTrusted = false): Promise<string[]> => {
@@ -17610,6 +17767,7 @@ export function toolAccessService(
       companyId: string,
       userId: string | null,
       localTrusted = false,
+      options: { includeGitHubApps?: boolean } = {},
     ) => {
       const [connections, grants, members, memberships] = await Promise.all([
         db
@@ -17656,6 +17814,27 @@ export function toolAccessService(
           asRecord(connection.config).sourceTemplateKey !== "github"
         )
           continue;
+        if (isGitHubAppConnection(connection)) {
+          // Dedicated metadata remains company-visible. Personal/shared
+          // metadata uses the same human audience as other GitHub methods.
+          if (!options.includeGitHubApps || !(localTrusted || memberships.length > 0)) continue;
+          if (connection.credentialPolicy !== "per_agent" && !grants.some(grant =>
+            grant.connectionId === connection.id && canBrowseProjectRepositoryGrant({
+              grant, userId, activeMember: localTrusted || memberships.length > 0,
+              audience: members.filter(member => member.grantId === grant.id).map(member => member.subjectId),
+            }))) continue;
+          connectionCount += 1;
+          usableConnections.push({ id: connection.id, name: connection.name });
+          try {
+            const result = await refreshGitHubAppAccess(db, connection);
+            for (const repo of result.github.repositories ?? []) {
+              mergeProjectRepository(repositories, repo, connection.name, connection.id);
+            }
+          } catch {
+            failedConnectionCount += 1;
+          }
+          continue;
+        }
         const connectionGrants = grants.filter(
           (grant) => grant.connectionId === connection.id,
         );
@@ -18748,6 +18927,9 @@ export function toolAccessService(
     ): Promise<ToolConnection> => {
       const existing = await getConnectionRow(connectionId);
       if (existing.connectionPurpose === "ai" && (input.config || input.transportConfig || input.credentialRefs || input.credentialSecretRefs || (input.credentialPolicy && input.credentialPolicy !== existing.credentialPolicy))) throw badRequest("Use AI account reconnect to change credentials. Provider, sign-in method, and ownership cannot be changed.");
+      if ((isGitHubAppConnection(existing) || isGitHubAppConnection({ config: input.config ?? input.transportConfig ?? {} })) && (input.config || input.transportConfig || input.credentialRefs || input.credentialSecretRefs || input.credentialPolicy)) {
+        throw badRequest("Use reconnect to replace a GitHub App key. Create a new connection to change its identity or access policy.");
+      }
       const config = normalizeGoogleSheetsConnectionConfig(
         input.config ?? input.transportConfig ?? existing.config,
       );
@@ -18855,7 +19037,7 @@ export function toolAccessService(
         .where(eq(toolCatalogEntries.connectionId, connection.id))
         .orderBy(desc(toolCatalogEntries.updatedAt));
       const cacheExpired =
-        connection.transport === "mcp_remote" &&
+        (connection.transport === "mcp_remote" || isGitHubAppConnection(connection)) &&
         connection.status !== "archived" &&
         (rows.length === 0 ||
           !connection.lastCatalogRefreshAt ||
@@ -20006,9 +20188,11 @@ export function toolAccessService(
       }
 
       if (
-        runContext.run.activeIdentityContextId &&
-        (connection.config.sourceTemplateKey === "github" ||
-          connection.transportConfig?.sourceTemplateKey === "github")
+        isGitHubAppConnection(connection) || (
+          runContext.run.activeIdentityContextId &&
+          (connection.config.sourceTemplateKey === "github" ||
+            connection.transportConfig?.sourceTemplateKey === "github")
+        )
       ) {
         await fail(
           409,
