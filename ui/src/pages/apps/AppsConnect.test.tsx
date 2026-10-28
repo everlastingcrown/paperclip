@@ -3,7 +3,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { CONNECTABLE_APP_DEFINITIONS, GOOGLE_WORKSPACE_CONNECTOR_PROFILES, getAppStoreDefinition } from "@paperclipai/shared";
+import { CONNECTABLE_APP_DEFINITIONS, GOOGLE_WORKSPACE_CONNECTOR_PROFILES, defaultConnectionAgentInstructions, getAppStoreDefinition } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/api/client";
 import { aiConnectionsApi } from "@/api/ai-connections";
@@ -1904,6 +1904,37 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     expect(container.textContent).toContain("How do you want to connect?");
     expect(startOAuthMock).not.toHaveBeenCalled();
     expect(connectAppMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["page", "dialog"] as const)("reconnects a dedicated managed GitHub account on %s without changing agent access", async (host) => {
+    const connectionId = "22222222-2222-4222-8222-222222222222";
+    mockSearch.value = `source=github&reconnect=${connectionId}`;
+    listGalleryMock.mockResolvedValue({ apps: [GITHUB_MANAGED] });
+    listApplicationsMock.mockResolvedValue({ applications: [{ id: "app-github", status: "active", metadata: { sourceTemplateKey: "github" } }] });
+    const connection = {
+      id: connectionId, applicationId: "app-github", authKind: "oauth", credentialPolicy: "per_agent", status: "active",
+      agentInstructions: { ...defaultConnectionAgentInstructions(GITHUB.agentInstructions)!, enabled: false },
+      config: { sourceTemplateKey: "github", connectionMethodKey: "managed", oauth: { connectorSubjectAgentId: "agent-1" } }, transportConfig: {},
+    };
+    listConnectionsMock.mockResolvedValue({ connections: [connection] });
+    connectAppMock.mockResolvedValue({ connectionId, connection, auth: { kind: "oauth" } });
+    startOAuthMock.mockResolvedValue(oauthStartResponse(connectionId, "github", "https://github.com/login/oauth/authorize?state=reconnect"));
+
+    await render(undefined, false, <ConnectionSetupFlow host={host} serviceSlug="github" />);
+    await flushReact();
+    expect(container.textContent).toContain("agent access stays as it is");
+    const handoff = buttonByText("Continue to GitHub");
+    expect(handoff).toBeDefined();
+    expect(handoff?.disabled).toBe(false);
+    expect(buttonContaining("Select agents")).toBeUndefined();
+    await act(async () => handoff!.click());
+    await flushReact();
+
+    expect(startOAuthMock).toHaveBeenCalledWith(connectionId, { asCurrentUser: false, asAgentId: "agent-1" });
+    expect(connectAppMock).toHaveBeenCalledWith("company-1", expect.objectContaining({
+      galleryKey: "github", connectionMethodKey: "managed", reconnectConnectionId: connectionId, grantKind: "agent",
+    }));
+    expect(putConnectionInstallsMock).not.toHaveBeenCalled();
   });
 
   it("keeps provider-specific wording and the handoff cue for direct OAuth", async () => {

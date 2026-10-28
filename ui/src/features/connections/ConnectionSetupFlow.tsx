@@ -1459,8 +1459,11 @@ function StandardConnectionSetupFlow({
   };
 
   const effectiveGrantKind = fixedGrantKind ?? grantKind;
+  const preserveOAuthAgentAccess = Boolean(automaticOAuthEntry
+    && connectionMethodSupportsAutomaticOAuth(selectedSetupMethod)
+    && (resumableOAuthConnection || reconnectConnection));
   const dedicatedAgentSelectionValid = (!retainedGitHubApp || Boolean(retainedAppGrant && retainedInstalls.data))
-    && (effectiveGrantKind !== "agent" || (retainedGitHubApp ? Boolean(retainedAgentId) : installAgentIds.size === 1));
+    && (effectiveGrantKind !== "agent" || (retainedGitHubApp ? Boolean(retainedAgentId) : preserveOAuthAgentAccess || installAgentIds.size === 1));
   useEffect(() => {
     if (effectiveGrantKind === "agent") setInstallChoice("specific");
   }, [effectiveGrantKind]);
@@ -2230,7 +2233,7 @@ function StandardConnectionSetupFlow({
         installChoice,
         installCount: installAgentIds.size,
         lockedAgentId: requestedAgentId ?? null,
-        preserveAgentAccess: retainedGitHubApp || Boolean(automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection)),
+        preserveAgentAccess: retainedGitHubApp || preserveOAuthAgentAccess,
       })}
       notice={[
         galleryQuery.data?.capabilities?.canCreateOrganizationGrant === false
@@ -2255,7 +2258,7 @@ function StandardConnectionSetupFlow({
       capabilities={galleryQuery.data?.capabilities}
       githubIdentity={entry?.slug === "github"}
       identityLoading={Boolean(automaticOAuthEntry) && directOAuthLookupPending}
-      preserveAgentAccess={retainedGitHubApp || Boolean((automaticOAuthEntry && (resumableOAuthConnection || reconnectConnection)) || reconnectConnection?.connectionPurpose === "ai")}
+      preserveAgentAccess={retainedGitHubApp || preserveOAuthAgentAccess || reconnectConnection?.connectionPurpose === "ai"}
       disabled={connectMutation.isPending || oauthStartMutation.isPending || retainedGitHubApp}
     />
     {entry && instructionTemplate && instructionValue && <div className="mt-6"><ConnectionInstructionsEditor provider={entry.name} template={instructionTemplate} value={instructionValue} onChange={(value) => setInstructionDraft({ slug: entry.slug, value })} disabled={connectMutation.isPending || oauthStartMutation.isPending} /></div>}
