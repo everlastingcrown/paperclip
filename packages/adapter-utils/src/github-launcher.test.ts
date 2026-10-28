@@ -12,7 +12,9 @@ const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 describe("managed GitHub launchers", () => {
-  it.each(["git", "gh"])("authenticates %s after the local Codex shell environment filter", async (program) => {
+  it.each([
+    ["git", false], ["gh", false], ["git", true], ["gh", true],
+  ] as const)("authenticates %s after the local Codex shell environment filter (bridge: %s)", async (program, withBridge) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-codex-github-"));
     cleanups.push(() => rm(root, { recursive: true, force: true }));
     const bin = path.join(root, "managed"), realBin = path.join(root, "real");
@@ -23,6 +25,10 @@ describe("managed GitHub launchers", () => {
     const requests: string[] = [];
     const server = createServer((req, res) => {
       requests.push(req.headers["x-paperclip-github-capability"] as string);
+      if (req.headers.authorization !== `Bearer ${withBridge ? "bridge-authentication" : "run-capability"}`) {
+        res.writeHead(401).end();
+        return;
+      }
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ status: "available", env: { GH_TOKEN: "managed-operation-token" } }));
     });
@@ -32,6 +38,7 @@ describe("managed GitHub launchers", () => {
     const launchEnvironment = githubBrokerEnvironment({
       PATH: `${bin}:${realBin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
       GH_CONFIG_DIR: root,
+      ...(withBridge ? { PAPERCLIP_GITHUB_BRIDGE_TOKEN: "bridge-authentication" } : {}),
     }, { url: `http://127.0.0.1:${port}`, token: "run-capability" });
     const keys = new Set(codexShellEnvironmentKeys(launchEnvironment, launchEnvironment, false));
     const shellEnvironment = Object.fromEntries(Object.entries(launchEnvironment).filter(([key]) => keys.has(key)));

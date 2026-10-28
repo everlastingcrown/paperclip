@@ -7,8 +7,6 @@ const PROVIDER_ONLY_KEYS: ReadonlySet<string> = new Set([
   ...AGENT_OBSERVABILITY_ENV_KEYS,
 ]);
 const IDENTITY_KEYS = ["PAPERCLIP_AGENT_KEY_ID", "PAPERCLIP_AGENT_PUBLIC_KEY", "PAPERCLIP_AGENT_PRIVATE_KEY"];
-// Managed git/gh launchers acquire credentials per operation using these
-// controller-issued capabilities. Codex's default secret filter drops them.
 const GITHUB_BROKER_KEYS: ReadonlySet<string> = new Set([
   "PAPERCLIP_GITHUB_BROKER_TOKEN", "PAPERCLIP_GITHUB_BRIDGE_TOKEN",
 ]);

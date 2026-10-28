@@ -6,6 +6,8 @@ it("admits assigned service secrets by name while retaining unassigned secret ex
   const names = codexShellEnvironmentKeys({ ...assigned, HOST_API_TOKEN: "host-canary" }, assigned, false);
   expect(names).toEqual(expect.arrayContaining(Object.keys(assigned)));
   expect(names).not.toContain("HOST_API_TOKEN");
+  expect(names).not.toContain("PAPERCLIP_GITHUB_BROKER_TOKEN");
+  expect(names).not.toContain("PAPERCLIP_GITHUB_BRIDGE_TOKEN");
   for (const value of Object.values(assigned)) expect(JSON.stringify(names)).not.toContain(value);
 });
 
