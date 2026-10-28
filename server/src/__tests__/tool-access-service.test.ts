@@ -17917,6 +17917,7 @@ describeEmbeddedPostgres("tool access service", () => {
     let revokeA = false;
     let rejectB = false;
     let rejectMcp = false;
+    let revokeManagerOnToken = false;
     const readTool = (name: string, description = "Original action") => ({
       name, description, inputSchema: { type: "object" }, annotations: { readOnlyHint: true },
     });
@@ -17929,6 +17930,12 @@ describeEmbeddedPostgres("tool access service", () => {
         return Response.json({ jsonrpc: "2.0", id: rpc.id, result: { tools: discoveredTools } });
       }
       const path = String(url).replace("https://api.github.com", "");
+      if (path === "/app/installations/456/access_tokens" && revokeManagerOnToken) {
+        await db.delete(principalPermissionGrants).where(and(
+          eq(principalPermissionGrants.companyId, company.id), eq(principalPermissionGrants.principalId, "board"),
+          eq(principalPermissionGrants.permissionKey, "tools:manage_connections"),
+        ));
+      }
       if (path === "/app") {
         const jwt = String((init?.headers as Record<string, string>).Authorization).replace("Bearer ", "");
         const [header, payload, signature] = jwt.split(".");
@@ -18041,6 +18048,50 @@ describeEmbeddedPostgres("tool access service", () => {
     await expect(acquire()).rejects.toThrow();
     await expect(reconnect("invalid PEM")).rejects.toMatchObject({ status: 422 });
     expect(await readGrant()).toMatchObject({ status: "revoked" });
+    if (kind !== "user") {
+      await db.update(companyMemberships).set({ membershipRole: "member" }).where(and(
+        eq(companyMemberships.companyId, company.id), eq(companyMemberships.principalId, "board"),
+      ));
+      const revokedGrant = await readGrant();
+      const revokedVersions = await versions();
+      const providerCalls = authenticatedKeys.length;
+      const creatorApp = createRouteApp(db, boardSessionActor(company.id, "member", "board"));
+      const creatorReconnect = () => request(creatorApp)
+        .post(`/api/tool-connections/${connected.connectionId}/reconnect`)
+        .send({ credentialValues: { "credentials.privateKey": pem(keyB) } });
+      await creatorReconnect().expect(403);
+      await expect(service.connectGalleryApp(company.id, {
+        galleryKey: "github", connectionMethodKey: "app-installation", reconnectConnectionId: connected.connectionId,
+        grantKind: kind, ...(kind === "agent" ? { subjectAgentId: agent.id } : {}), configValues,
+        credentialValues: { "credentials.privateKey": pem(keyB) },
+      }, actor)).rejects.toMatchObject({ status: 403 });
+      expect(await readGrant()).toEqual(revokedGrant);
+      expect(await versions()).toEqual(revokedVersions);
+      expect(authenticatedKeys).toHaveLength(providerCalls);
+      const [managerPermission] = await db.insert(principalPermissionGrants).values({
+        companyId: company.id, principalType: "user", principalId: "board",
+        permissionKey: "tools:manage_connections", grantedByUserId: "admin",
+        scope: kind === "agent" ? { targetAgentIds: [secondAgent.id] } : null,
+      }).returning();
+      if (kind === "agent") {
+        await creatorReconnect().expect(403);
+        expect(await readGrant()).toEqual(revokedGrant);
+        expect(await versions()).toEqual(revokedVersions);
+        expect(authenticatedKeys).toHaveLength(providerCalls);
+        await db.update(principalPermissionGrants).set({ scope: { targetAgentIds: [agent.id] } })
+          .where(eq(principalPermissionGrants.id, managerPermission!.id));
+      }
+      revokeManagerOnToken = true;
+      await expect(reconnect(pem(keyB))).rejects.toMatchObject({ status: 403 });
+      expect(await readGrant()).toEqual(revokedGrant);
+      expect(await versions()).toEqual(revokedVersions);
+      revokeManagerOnToken = false;
+      await db.insert(principalPermissionGrants).values({
+        companyId: company.id, principalType: "user", principalId: "board",
+        permissionKey: "tools:manage_connections", grantedByUserId: "admin",
+        scope: kind === "agent" ? { targetAgentIds: [agent.id] } : null,
+      });
+    }
     await reconnect(pem(keyB));
     expect(authenticatedKeys.length).toBeGreaterThan(0);
     expect(authenticatedKeys.every(key => key === "B")).toBe(true);

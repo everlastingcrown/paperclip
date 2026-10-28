@@ -144,6 +144,11 @@ An inactive or revoked App grant can reconnect only after you submit a private
 key for verification. Blank-key reuse remains available for active grants.
 Successful recovery reactivates the same grant and clears its revocation fields;
 failed verification preserves the inactive grant and its saved credentials.
+Reactivating a shared or dedicated grant requires current connection-manager
+permission; connection-creator access alone cannot undo a revocation. Dedicated
+grant recovery also checks the manager's permission scope for the saved agent.
+Authorization is checked before acquiring a replacement token and again in the
+grant update transaction.
 Removing a connection in Paperclip does not uninstall
 the App from GitHub or delete its registration. Manage those in GitHub settings.
 

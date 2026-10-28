@@ -396,8 +396,10 @@ Custom GitHub Apps (2026-10-25) extend `connection-setup/credentials`,
 `connection-setup/failure`. Authorized human setup uses
 `POST /api/companies/{companyId}/tools/apps/connect` and key replacement uses
 `POST /api/tool-connections/{connectionId}/reconnect`. Personal recovery belongs
-to the saved owner; shared/dedicated recovery requires connection configuration
-permission. Inactive grants require a submitted key and successful verification;
+to the saved owner; shared/dedicated recovery requires current connection-manager
+permission, scoped to the saved agent for a dedicated grant. Creator access alone
+cannot restore a revoked shared/dedicated grant. Authority is checked before
+token acquisition and in the grant update transaction. Inactive grants require a submitted key and successful verification;
 recovery cannot change the saved App, installation, scope, or owner.
 
 Assigned agents use the selected bot through governed MCP tools and authorized

@@ -7,7 +7,7 @@ import { getGitHubAppGrant, isGitHubAppConnection, parseGitHubAppConfig, refresh
 import { createGitHubAppClient, GITHUB_APP_KEY_PATH } from "./github-app-client.js";
 import { restConnectorFor } from "./connectors/rest-registry.js";
 import { createConnectionCredentialValidation } from "./tool-access/connections/credential-validation.js";
-import { createConnectionGrants } from "./tool-access/connections/grants.js";
+import { assertManagedGrantReactivationAccess, createConnectionGrants } from "./tool-access/connections/grants.js";
 import { createConnectionInstalls } from "./tool-access/connections/installs.js";
 import { createConnectionRemoval } from "./tool-access/connections/removal.js";
 import { createToolRemoteHttp } from "./tool-access/remote-http.js";
@@ -2274,6 +2274,9 @@ export function toolAccessService(
       || (retainedAppGrant.kind === "agent" && retainedAppGrant.subjectAgentId !== dedicatedAgentId))) {
       throw badRequest("Reconnect must preserve the GitHub App ownership and method.");
     }
+    if (retainedAppGrant && retainedConnection) {
+      await assertManagedGrantReactivationAccess(db, retainedConnection, retainedAppGrant, actor);
+    }
     if (retainedAppGrant && retainedAppGrant.status !== "active" && !credentialValues[GITHUB_APP_KEY_PATH]?.trim()) {
       throw badRequest("Enter a GitHub App private key to reconnect this inactive identity.");
     }
@@ -2686,17 +2689,28 @@ export function toolAccessService(
         }
       } else if (dedicatedAgentId) {
         if (isGitHubAppConnection(connectionRow)) {
-          const [previous] = await db.select().from(connectionGrants).where(and(
-            eq(connectionGrants.companyId, companyId), eq(connectionGrants.connectionId, connectionRow.id),
-            eq(connectionGrants.kind, "agent"), eq(connectionGrants.subjectAgentId, dedicatedAgentId),
-          ));
-          const values = { credentialSecretRefs, status: "active" as const, revokedAt: null,
-            revokedByUserId: null, revokedByAgentId: null, updatedAt: now() };
-          const [current] = previous
-            ? await db.update(connectionGrants).set(values).where(eq(connectionGrants.id, previous.id)).returning()
-            : await db.insert(connectionGrants).values({ ...values, companyId, connectionId: connectionRow.id,
-                kind: "agent", subjectAgentId: dedicatedAgentId, isDefault: false,
-                createdByUserId: actor?.actorType === "user" ? actor.actorId : null }).returning();
+          const appConnection = connectionRow;
+          const { previous, current } = await db.transaction(async (tx) => {
+            const [snapshot] = await tx.select({ grant: connectionGrants,
+              version: sql<string>`${connectionGrants.updatedAt}::text`,
+            }).from(connectionGrants).where(and(
+              eq(connectionGrants.companyId, companyId), eq(connectionGrants.connectionId, appConnection.id),
+              eq(connectionGrants.kind, "agent"), eq(connectionGrants.subjectAgentId, dedicatedAgentId),
+            )).for("update");
+            if (retainedAppGrant && snapshot?.version !== retainedAppGrant.updatedAtVersion) {
+              throw conflict("The GitHub App identity changed during reconnect. Please try again.");
+            }
+            const previous = snapshot?.grant;
+            if (previous) await assertManagedGrantReactivationAccess(tx, appConnection, previous, actor);
+            const values = { credentialSecretRefs, status: "active" as const, revokedAt: null,
+              revokedByUserId: null, revokedByAgentId: null, updatedAt: now() };
+            const [current] = previous
+              ? await tx.update(connectionGrants).set(values).where(eq(connectionGrants.id, previous.id)).returning()
+              : await tx.insert(connectionGrants).values({ ...values, companyId, connectionId: appConnection.id,
+                  kind: "agent", subjectAgentId: dedicatedAgentId, isDefault: false,
+                  createdByUserId: actor?.actorType === "user" ? actor.actorId : null }).returning();
+            return { previous, current: current! };
+          });
           if (revivedConnectionPrevious) revivedGrantMutation = { previous: previous ?? null, current: current! };
           await audit({ companyId, connectionId: connectionRow.id, action: previous ? "connection_grant.updated" : "connection_grant.created",
             outcome: "success", actor, details: { kind: "agent", subjectAgentId: dedicatedAgentId } });
@@ -2704,11 +2718,19 @@ export function toolAccessService(
       } else {
         let organizationGrant: typeof connectionGrants.$inferSelect;
         if (retainedAppGrant?.kind === "organization") {
-          const [updated] = await db.update(connectionGrants).set({
-            credentialSecretRefs, status: "active", isDefault: true, revokedAt: null,
-            revokedByUserId: null, revokedByAgentId: null, updatedAt: now(),
-          }).where(and(eq(connectionGrants.companyId, companyId), eq(connectionGrants.id, retainedAppGrant.id),
-            sql`${connectionGrants.updatedAt} = ${retainedAppGrant.updatedAtVersion}::timestamptz`)).returning();
+          const appConnection = connectionRow;
+          const [updated] = await db.transaction(async (tx) => {
+            const [currentGrant] = await tx.select().from(connectionGrants).where(and(
+              eq(connectionGrants.companyId, companyId), eq(connectionGrants.id, retainedAppGrant.id),
+            )).for("update");
+            if (!currentGrant) throw conflict("The GitHub App identity changed during reconnect. Please try again.");
+            await assertManagedGrantReactivationAccess(tx, appConnection, currentGrant, actor);
+            return tx.update(connectionGrants).set({
+              credentialSecretRefs, status: "active", isDefault: true, revokedAt: null,
+              revokedByUserId: null, revokedByAgentId: null, updatedAt: now(),
+            }).where(and(eq(connectionGrants.companyId, companyId), eq(connectionGrants.id, retainedAppGrant.id),
+              sql`${connectionGrants.updatedAt} = ${retainedAppGrant.updatedAtVersion}::timestamptz`)).returning();
+          });
           if (!updated) throw conflict("The GitHub App identity changed during reconnect. Please try again.");
           organizationGrant = updated;
           revivedGrantMutation = { previous: retainedAppGrant, current: updated };
@@ -3697,6 +3719,7 @@ export function toolAccessService(
     let appProviderTenant: (typeof connectionGrants.$inferSelect)["providerTenant"] = null;
     if (isGitHubAppConnection(connection)) {
       appGrant = await getGitHubAppGrant(db, connection, { forReconnect: true });
+      await assertManagedGrantReactivationAccess(db, connection, appGrant, actor);
       const key = input.credentialValues[GITHUB_APP_KEY_PATH]?.trim();
       if (!key) throw badRequest("Enter a replacement GitHub App private key");
       const verified = await createGitHubAppClient().acquire(
@@ -3741,6 +3764,7 @@ export function toolAccessService(
           || currentGrant.status !== appGrant.status) {
           throw conflict("The GitHub App identity changed during key verification. Please try again.");
         }
+        await assertManagedGrantReactivationAccess(tx, currentConnection, currentGrant, actor);
       }
       for (const field of providedFields) {
         const value = input.credentialValues[field.configPath]!.trim();
