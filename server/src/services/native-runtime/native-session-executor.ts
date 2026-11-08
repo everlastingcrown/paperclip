@@ -1,3 +1,4 @@
+import { executeRemoteStagingScript } from "./remote-staging.js";
 import { remoteRecoveryLeaseMismatch } from "./remote-recovery-lease-mismatch.js";
 import { captureRemoteNativeProviderArtifacts } from "./native-provider-artifact-capture.js";
 import { NativeSessionDiagnostics, nativeSessionDiagnostics, type NativeDiagnosticLease } from "./native-session-diagnostics.js";
@@ -12747,15 +12748,10 @@ export async function stageRemoteRunnerFile(input: {
     `base64 -d > "$paperclip_stage_file" && ` +
     `chmod ${input.mode.toString(8)} "$paperclip_stage_file" && ` +
     `[ ! -d '${escapedTarget}' ] && mv -f "$paperclip_stage_file" '${escapedTarget}'`;
-  const result = await runner.execute({
-    command: "sh",
-    args: ["-c", script],
-    stdin: bytes.toString("base64"),
-    bypassSession: true,
+  await executeRemoteStagingScript({
+    runner, bytes, script, directory,
+    failureMessage: "runner_remote_staging_failed",
   });
-  if (result.exitCode !== 0 || result.timedOut) {
-    throw new Error("runner_remote_staging_failed");
-  }
 }
 
 function archiveExcludeArgs(entries: readonly string[]): string[] {
@@ -12869,15 +12865,10 @@ export async function stageRemoteRunnerDirectory(input: {
     `case "$(tar --version 2>/dev/null)" in *"GNU tar"*) set -- --delay-directory-restore ;; *) set -- ;; esac; ` +
     `umask 077; test ! -L '${escapedTarget}' && mkdir -p '${escapedTarget}' && ` +
     `{ ${immutableStage}; } && chmod ${input.mode.toString(8)} '${escapedTarget}'`;
-  const result = await input.runner.execute({
-    command: "sh",
-    args: ["-c", script],
-    stdin: archive.toString("base64"),
-    bypassSession: true,
+  await executeRemoteStagingScript({
+    runner: input.runner, bytes: archive, script, directory: posix.dirname(input.targetPath),
+    failureMessage: "runner_remote_directory_staging_failed",
   });
-  if (result.exitCode !== 0 || result.timedOut) {
-    throw new Error("runner_remote_directory_staging_failed");
-  }
 }
 
 /** The normal remote pack installer, without run/session/DB authority. Both

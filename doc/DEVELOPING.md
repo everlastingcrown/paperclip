@@ -3363,6 +3363,13 @@ concurrent listings do not skip healthy logs because another listing is busy.
 
 ### Preinstalled remote runner runtime
 
+Native artifact staging without provider file sync bounds each base64 stdin to
+4 MiB (3 MiB of decoded data). Larger files and directory archives upload in
+chunks to a private temporary directory before the existing staging script runs.
+A failed chunk leaves the destination untouched and triggers scratch cleanup.
+A controller runner update can require this fallback when a preinstalled image
+runner no longer matches its digest; refreshing the image avoids that upload.
+
 Claude CLI tests and runs prepare a compatible runtime when a managed sandbox's
 default `claude` command is older than the selected model requires. Preparation
 installs the exact minimum supported package into a versioned workspace runtime

@@ -76,7 +76,7 @@ import {
   type PrpEvent,
 } from "@paperclipai/paperclip-runner";
 import { existsSync } from "node:fs";
-import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { nativeSha256 } from "./canonical.js";
 import { resolveRemoteProviderPackAuthority } from "./remote-provider-pack-authority.js";
@@ -4405,6 +4405,52 @@ describe("remote provider checkpoint restores", () => {
           await chmod(path, 0o700).catch(() => undefined);
         }
       }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["file", false], ["directory", false], ["file", true], ["directory", true],
+  ] as const)("stages a large %s within the provider stdin bound (interrupted: %s)", async (kind, interrupted) => {
+    const root = await mkdtemp(join(tmpdir(), "paperclip-bounded-staging-"));
+    const sourcePath = join(root, "source");
+    const targetPath = join(root, "target with 'quotes'");
+    const bytes = randomBytes(4 * 1024 * 1024 + 17);
+    let writes = 0;
+    const execute = vi.fn(async (command: { command: string; args: string[]; stdin?: string; bypassSession?: boolean }) => {
+      expect(command.bypassSession).toBe(true);
+      if (Buffer.byteLength(command.stdin ?? "") > 4 * 1024 * 1024) {
+        throw new Error("stdin exceeds OpenShell 4 MiB limit");
+      }
+      if (command.stdin && ++writes === 2 && interrupted) {
+        return { exitCode: 1, timedOut: false, stdout: "", stderr: "transfer interrupted" };
+      }
+      const result = spawnSync(command.command, command.args, { input: command.stdin, encoding: "utf8" });
+      return { exitCode: result.status, timedOut: false, stdout: result.stdout, stderr: result.stderr };
+    });
+    try {
+      if (kind === "directory") await mkdir(sourcePath);
+      await writeFile(kind === "file" ? sourcePath : join(sourcePath, "asset"), bytes);
+      const stage = kind === "file" ? stageRemoteRunnerFile : stageRemoteRunnerDirectory;
+      if (interrupted) {
+        if (kind === "directory") await mkdir(targetPath);
+        await writeFile(kind === "file" ? targetPath : join(targetPath, "asset"), "preserved");
+      }
+      const staged = stage({
+        target: { kind: "remote", transport: "sandbox", remoteCwd: root } as never,
+        runner: { execute } as never, sourcePath, targetPath, mode: 0o700,
+      });
+      if (interrupted) {
+        await expect(staged).rejects.toThrow(kind === "file"
+          ? "runner_remote_staging_failed" : "runner_remote_directory_staging_failed");
+        expect(await readFile(kind === "file" ? targetPath : join(targetPath, "asset"), "utf8")).toBe("preserved");
+      } else {
+        await staged;
+        expect(await readFile(kind === "file" ? targetPath : join(targetPath, "asset"))).toEqual(bytes);
+        expect((await lstat(targetPath)).mode & 0o777).toBe(0o700);
+      }
+      expect((await readdir(root)).sort()).toEqual(["source", "target with 'quotes'"]);
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
