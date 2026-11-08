@@ -1,4 +1,3 @@
-import { connectionActorUserId } from "./actor.js";
 import { GITHUB_APP_MCP_URL } from "../github-app-client.js";
 import { isGitHubAppConnection, refreshGitHubAppAccess } from "../github-app-credentials.js";
 import type { ActorInfo } from "./types.js";

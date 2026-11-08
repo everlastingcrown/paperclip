@@ -17704,12 +17704,12 @@ describeEmbeddedPostgres("tool access service", () => {
       const agent = await createAgent(db, company.id);
       const service = createTestToolAccessService(db);
       const application = await service.createApplication(company.id, { name: "GitHub", type: "rest_api" });
-      const connection = await service.createConnection(company.id, connectionInput({
+      const connection = await service.createConnection(company.id, {
         applicationId: application.id, name: "GitHub App diagnostics", transport: "rest_api", status: "draft", credentialPolicy: "per_agent",
         config: { sourceTemplateKey: "github", connectionMethodKey: "app-installation", methodConfig: {
           version: "1", appId: "123", installationId: "456", repositories: "owner/repo", permissionProfile: "read",
         } },
-      }));
+      });
       const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey
         .export({ type: "pkcs8", format: "pem" }).toString();
       const secret = await secretService(db).create(company.id, {

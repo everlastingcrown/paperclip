@@ -1,4 +1,3 @@
-import { connectionActorUserId } from "../actor.js";
 import { projectedConnectionHeaders } from "../connection-methods.js";
 import { isGitHubAppConnection, refreshGitHubAppAccess } from "../../github-app-credentials.js";
 import { assertSupportedConnection } from "../connections/setup-policy.js";

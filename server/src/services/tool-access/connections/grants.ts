@@ -1,4 +1,4 @@
-import { accessService } from "../../access.js";
+import { authorizationService } from "../../authorization.js";
 
 import { toConnectionGrant } from "./projection.js";
 import { actorBinding } from "../actor.js";
@@ -28,8 +28,12 @@ export async function assertManagedGrantReactivationAccess(
   if (grant.kind === "user" || (grant.status === "active"
     && !grant.revokedAt && !grant.revokedByUserId && !grant.revokedByAgentId)) return;
   if (actor?.actorType === "user" && actor.actorSource === "local_implicit") return;
-  const userId = actor?.actorType === "user" && actor.actorId !== "board" ? actor.actorId : null;
-  if (!userId || !await accessService(db as Db).hasPermission(connection.companyId, "user", userId, "tools:manage_connections")) {
+  const userId = actor?.actorType === "user" ? actor.actorId : null;
+  if (!userId || !(await authorizationService(db as Db).decidePrincipalGrant({
+    companyId: connection.companyId, principalType: "user", principalId: userId,
+    permissionKey: "tools:manage_connections", action: "tools:manage_connections",
+    scope: { targetAgentId: grant.kind === "agent" ? grant.subjectAgentId : null },
+  })).allowed) {
     throw forbidden("Current connection-manager authority is required to reactivate this grant");
   }
 }

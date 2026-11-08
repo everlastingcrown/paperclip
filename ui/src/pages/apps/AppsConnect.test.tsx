@@ -23,6 +23,7 @@ vi.mock("@/api/instanceSettings", () => ({ instanceSettingsApi: {
   getGeneral: async () => ({}),
 } }));
 const listApplicationsMock = vi.hoisted(() => vi.fn());
+const listConnectionGrantsMock = vi.hoisted(() => vi.fn());
 const listConnectionsMock = vi.hoisted(() => vi.fn());
 const getConnectionMock = vi.hoisted(() => vi.fn());
 const getConnectionInstallsMock = vi.hoisted(() => vi.fn());
@@ -81,6 +82,7 @@ vi.mock("@/api/tools", () => ({
     syncAggregatorApps: vi.fn().mockResolvedValue({ apps: [], sync: { status: "idle" }, discovery: { availability: "available" } }),
     listGallery: (companyId: string) => listGalleryMock(companyId),
     listApplications: (companyId: string) => listApplicationsMock(companyId),
+    listConnectionGrants: (id: string) => listConnectionGrantsMock(id),
     listConnections: (companyId: string) => listConnectionsMock(companyId),
     getConnection: (id: string) => getConnectionMock(id),
     getConnectionInstalls: (id: string) => getConnectionInstallsMock(id),

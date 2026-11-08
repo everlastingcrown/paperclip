@@ -1805,7 +1805,7 @@ export function toolAccessService(
             .orderBy(desc(toolConnections.updatedAt))
             .limit(1)
         : [undefined];
-    let retainedConnection = requestedResumeConnection ?? (recoveredConnection && isGitHubAppConnection(recoveredConnection) ? undefined : recoveredConnection);
+    const retainedConnection = requestedResumeConnection ?? (recoveredConnection && isGitHubAppConnection(recoveredConnection) ? undefined : recoveredConnection);
     let applicationName = existingApplication?.name ?? requestedName;
     let name = (retainedConnection && isGitHubAppConnection(retainedConnection) ? input.name : undefined)
       ?? retainedConnection?.name ?? requestedName;
@@ -3475,7 +3475,7 @@ export function toolAccessService(
       const profileBindings: ToolProfileBinding[] = [];
       // These connectors expose one agent-access choice. Commit installation
       // reach and permission bindings together, including an empty selection.
-      if (isRemoteMcpConnectorMethod(connection.config.sourceTemplateKey, connection.config.connectionMethodKey)) {
+      if (isGitHubAppConnection(connection) || isRemoteMcpConnectorMethod(connection.config.sourceTemplateKey, connection.config.connectionMethodKey)) {
         const desired = new Map(bindingInputs.flatMap((binding) => binding.targetType === "company" || binding.targetType === "agent"
           ? [[`${binding.targetType}:${binding.targetId}`, { targetType: binding.targetType, targetId: binding.targetId }] as const] : []));
         const removed = existingInstalls.filter((install) => !desired.has(`${install.targetType}:${install.targetId}`));
