@@ -118,7 +118,7 @@ describe("codex execute — outbound auth copy-back restore contribution", () =>
     );
   }
 
-  async function runTeardown(input: { sandboxAuth: string; hostAuth: string; onProviderStopped?: () => Promise<void>; withIdentity?: boolean; env?: Record<string, string> }) {
+  async function runTeardown(input: { sandboxAuth: string; hostAuth: string; onProviderStopped?: () => Promise<void>; withIdentity?: boolean; shellEnvironmentKeys?: string[]; env?: Record<string, string> }) {
     const rootDir = await mkdtemp(
       path.join(os.tmpdir(), "paperclip-codex-copyback-e2e-"),
     );
@@ -140,6 +140,7 @@ describe("codex execute — outbound auth copy-back restore contribution", () =>
     const commandArgs: string[] = [];
     const executionResult = await execute({
       runId: "run-copyback-e2e",
+      shellEnvironmentKeys: input.shellEnvironmentKeys,
       ...(input.withIdentity ? {
         authToken: "assigned-run-token",
         agentIdentity: { keyId: "sha256:test", publicKeyPem: "public", privateKeyPem: "private" },
@@ -193,12 +194,12 @@ describe("codex execute — outbound auth copy-back restore contribution", () =>
   it.each([true, false])("delivers configured service tokens to CLI shells while isolating host and provider credentials (identity: %s)", async (withIdentity) => {
     vi.stubEnv("DATABASE_URL", "postgres://operator:host-password@host/private");
     vi.stubEnv("HOST_DATABASE_PASSWORD", "host-password");
-    const { commandArgs } = await runTeardown({ sandboxAuth: "{}", hostAuth: "{}", withIdentity,
+    const { commandArgs } = await runTeardown({ sandboxAuth: "{}", hostAuth: "{}", withIdentity, shellEnvironmentKeys: ["SANDBOX_TOKEN", "MISSING"],
       env: { SLACK_BOT_TOKEN: "assigned-tool-token", OPENAI_API_KEY: "provider-key-canary" },
     });
     const policy = commandArgs.find(arg => arg.startsWith("shell_environment_policy.include_only="));
     const keys = policy ? JSON.parse(policy.slice(policy.indexOf("=") + 1)) : [];
-    expect(keys).toContain("SLACK_BOT_TOKEN");
+    expect(keys).toEqual(expect.arrayContaining(["SLACK_BOT_TOKEN", "SANDBOX_TOKEN", "MISSING"]));
     if (withIdentity) expect(keys).toEqual(expect.arrayContaining([
       "PAPERCLIP_API_KEY", "PAPERCLIP_AGENT_PRIVATE_KEY",
     ]));

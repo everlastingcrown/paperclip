@@ -42,3 +42,9 @@ it("passes the run's GitHub broker capability so the gh and git launchers can fe
   expect(names).not.toContain("PAPERCLIP_GITHUB_BRIDGE_TOKEN");
   expect(JSON.stringify(names)).not.toContain("capability");
 });
+
+it.each([false, true])("allows sandbox-only names before values exist (identity %s)", identity => {
+  const names = codexShellEnvironmentKeys({}, {}, identity, ["SERVICE_API_TOKEN", "CUSTOM_CA_PATH"]);
+  expect(names).toEqual(expect.arrayContaining(["SERVICE_API_TOKEN", "CUSTOM_CA_PATH"]));
+  expect(codexShellEnvironmentKeys({}, {}, identity)).not.toContain("SERVICE_API_TOKEN");
+});

@@ -10626,8 +10626,11 @@ describe("native warm session supervision", () => {
     { change: "addition", before: {}, after: { CUSTOM_TOKEN: "first" }, replaced: true },
     { change: "rotation", before: { CUSTOM_TOKEN: "first" }, after: { CUSTOM_TOKEN: "second" }, replaced: true },
     { change: "removal", before: { CUSTOM_TOKEN: "first" }, after: {}, replaced: true },
+    { change: "shell-name addition", before: {}, after: {}, shellBefore: undefined, shellAfter: '["SERVICE_API_TOKEN"]', replaced: true },
+    { change: "shell-name removal", before: {}, after: {}, shellBefore: '["SERVICE_API_TOKEN"]', shellAfter: '[]', replaced: true },
+    { change: "previous release without declaration", before: {}, after: {}, shellBefore: undefined, shellAfter: '[]', replaced: false },
     { change: "unchanged values", before: { CUSTOM_TOKEN: "first", FLAG: "on" }, after: { FLAG: "on", CUSTOM_TOKEN: "first" }, replaced: false },
-  ])("applies configured environment $change on the next warm turn", async ({ change, before, after, replaced }) => {
+  ])("applies configured environment $change on the next warm turn", async ({ change, before, after, replaced, ...shell }) => {
     const name = `warm-task-env-${change}`;
     const current = { ...execution,
       binding: { ...execution.binding, runId: `${name}-one`, executionWorkspaceId: name },
@@ -10648,10 +10651,10 @@ describe("native warm session supervision", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       await executePaperclipNativeSession({ db: leaseDb(current), execution: current, runnerInstanceId: name,
-        runnerEnvironment: configuredEnvironmentProjection(before) });
+        runnerEnvironment: { ...configuredEnvironmentProjection(before), ...(shell.shellBefore === undefined ? {} : { PAPERCLIP_SANDBOX_SHELL_ENV_KEYS: shell.shellBefore }) } });
       const next = { ...current, binding: { ...current.binding, runId: `${name}-two` } };
       await executePaperclipNativeSession({ db: leaseDb(next), execution: next, runnerInstanceId: name,
-        runnerEnvironment: configuredEnvironmentProjection(after) });
+        runnerEnvironment: { ...configuredEnvironmentProjection(after), ...(shell.shellAfter === undefined ? {} : { PAPERCLIP_SANDBOX_SHELL_ENV_KEYS: shell.shellAfter }) } });
       expect(first.close).toHaveBeenCalledTimes(replaced ? 1 : 0);
       if (replaced) expect(first.close).toHaveBeenCalledWith({ reason: "warm native session configuration changed" });
       await vi.advanceTimersByTimeAsync(20);

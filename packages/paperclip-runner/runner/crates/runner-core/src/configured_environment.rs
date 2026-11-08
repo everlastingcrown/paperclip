@@ -2,6 +2,7 @@
 use crate::local_runner::LocalRunnerError;
 use std::process::Command;
 
+const SHELL_MARKER: &str = "PAPERCLIP_SANDBOX_SHELL_ENV_KEYS";
 const MARKER: &str = "PAPERCLIP_CONFIGURED_ENV_KEYS";
 const RESERVED: &[&str] = &[
     "PAPERCLIP_OBSERVABILITY_CODEX_CONFIG",
@@ -71,6 +72,7 @@ const RESERVED: &[&str] = &[
     "PAPERCLIP_APPROVAL_STATUS",
     "PAPERCLIP_COMPANY_ID",
     "PAPERCLIP_CONFIGURED_ENV_KEYS",
+    "PAPERCLIP_SANDBOX_SHELL_ENV_KEYS",
     "PAPERCLIP_EXECUTION_MODE",
     "PAPERCLIP_EXTERNAL_CHAT_EXECUTION_BOUND_KEY",
     "PAPERCLIP_GITHUB_AUTH_MODE",
@@ -153,6 +155,44 @@ fn eligible_key(key: &str) -> bool {
         .any(|prefix| upper.starts_with(prefix))
 }
 
+pub(crate) fn apply_shell_environment(
+    command: &mut Command,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<(), LocalRunnerError> {
+    let invalid = || LocalRunnerError::invalid("invalid sandbox shell environment declaration");
+    let mut names = Vec::<String>::new();
+    if let Some(raw) = lookup(SHELL_MARKER) {
+        if raw.len() > 20_000 {
+            return Err(invalid());
+        }
+        names = serde_json::from_str(&raw).map_err(|_| invalid())?;
+        if names.len() > 128 || names.iter().any(|name| !eligible_key(name)) {
+            return Err(invalid());
+        }
+        names.sort();
+        if names.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(invalid());
+        }
+    }
+    let declaration = serde_json::to_string(&names).map_err(|_| invalid())?;
+    let mut values = Vec::new();
+    let mut bytes = 0;
+    for name in names {
+        if let Some(value) = lookup(&name) {
+            bytes += name.len() + value.len();
+            if value.contains('\0') || value.len() > 65_536 || bytes > 262_144 {
+                return Err(invalid());
+            }
+            values.push((name, value));
+        }
+    }
+    command.envs(values);
+    if lookup(SHELL_MARKER).is_some() {
+        command.env(SHELL_MARKER, declaration);
+    }
+    Ok(())
+}
+
 pub(crate) fn apply_configured_environment(
     command: &mut Command,
     lookup: impl Fn(&str) -> Option<String>,
@@ -196,6 +236,61 @@ pub(crate) fn apply_configured_environment(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    #[cfg(unix)]
+    fn shell_names_resolve_at_launch_and_removed_names_do_not_survive() {
+        for selected in [true, false] {
+            let raw = if selected {
+                "[\"SERVICE_API_TOKEN\",\"MISSING\"]"
+            } else {
+                "[]"
+            };
+            let source = BTreeMap::from([
+                (SHELL_MARKER, raw.to_string()),
+                ("SERVICE_API_TOKEN", "sandbox-token".to_string()),
+                ("HOST_TOKEN", "unselected".to_string()),
+                ("OPENAI_API_KEY", "provider-key".to_string()),
+            ]);
+            let mut command = Command::new("/bin/sh");
+            command.env_clear().args(["-c", "printf '%s|%s|%s|%s' \"$SERVICE_API_TOKEN\" \"$MISSING\" \"$HOST_TOKEN\" \"$OPENAI_API_KEY\""]);
+            apply_shell_environment(&mut command, |key| source.get(key).cloned()).unwrap();
+            let output = command.output().unwrap();
+            assert!(output.status.success());
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!(
+                    "{}|||",
+                    if selected { "sandbox-token" } else { "" }
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_shell_declarations() {
+        for raw in [
+            "null",
+            "[1]",
+            "[\"*TOKEN*\"]",
+            "[\"CUSTOM\",\"CUSTOM\"]",
+            "[\"OPENAI_API_KEY\"]",
+            "[\"NODE_OPTIONS\"]",
+            "[\"OTEL_EXPORTER_OTLP_HEADERS\"]",
+            "[\"PAPERCLIP_API_KEY\"]",
+            "[\"PAPERCLIP_SANDBOX_SHELL_ENV_KEYS\"]",
+        ] {
+            let mut command = Command::new("unused");
+            assert!(
+                apply_shell_environment(&mut command, |key| if key == SHELL_MARKER {
+                    Some(raw.into())
+                } else {
+                    None
+                })
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn rejects_reserved_malformed_missing_and_oversized_environment() {

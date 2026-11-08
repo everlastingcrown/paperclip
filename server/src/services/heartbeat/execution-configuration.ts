@@ -1,3 +1,4 @@
+import { checkedShellEnvironmentKeys } from "../../vendor/paperclip-runner/index.js";
 import { agentHarnessType } from "@paperclipai/shared";
 import { observabilitySecretValues } from "@paperclipai/adapter-utils/agent-observability";
 import { agentObservabilityService, unavailableAgentObservability, type ResolvedAgentObservability } from "../agent-observability.js";
@@ -416,6 +417,8 @@ export async function prepareHeartbeatExecutionConfiguration(db: Db, input: Hear
   return {
     prepared: true as const,
     mergedConfig, configSnapshot, runScopedMentionedSkillKeys, githubSelection, useHostGitHub,
+    shellEnvironmentKeys: selectedEnvironmentForConfig && ["sandbox", "plugin"].includes(selectedEnvironmentForConfig.driver)
+      ? checkedShellEnvironmentKeys(selectedEnvironmentForConfig.config.shellEnvironmentKeys ?? []) : [],
     resolvedConfig, configuredTaskEnvironment, secretKeys, secretManifest,
     runtimeSkillEntries, nativeRunnerPreparationSpans, runtimeConfig, agentIdentity, observability,
   };

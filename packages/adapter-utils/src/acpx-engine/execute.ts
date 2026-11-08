@@ -2121,7 +2121,7 @@ async function buildRuntime(input: {
     env.GEMINI_MODEL = requestedModel;
   }
   if (acpxAgent === "codex") {
-    const shellEnvironmentKeys = codexShellEnvironmentKeys(env, resolvedAdapterEnv, Boolean(input.ctx.agentIdentity));
+    const shellEnvironmentKeys = codexShellEnvironmentKeys(env, resolvedAdapterEnv, Boolean(input.ctx.agentIdentity), input.ctx.shellEnvironmentKeys);
     const codexStartupConfig = buildCodexStartupConfig({
       existingConfig: env.CODEX_CONFIG,
       shellEnvironmentKeys,

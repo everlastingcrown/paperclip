@@ -695,13 +695,14 @@ describe("shared ACPX engine runtime behavior", () => {
         SLACK_BOT_TOKEN: "assigned-tool-token", OPENAI_API_KEY: "provider-key-canary",
         OTEL_EXPORTER_OTLP_HEADERS: "authorization=export-secret-canary",
       } }, {
+        shellEnvironmentKeys: ["SANDBOX_TOKEN", "MISSING"],
         ...(withIdentity ? {
           authToken: "assigned-run-token",
           agentIdentity: { keyId: "sha256:test", publicKeyPem: "public", privateKeyPem: "private" },
         } : {}),
       });
       const config = JSON.parse(String((meta[0]?.env as Record<string, string>).CODEX_CONFIG ?? "{}"));
-      expect(config.shell_environment_policy?.include_only).toContain("SLACK_BOT_TOKEN");
+      expect(config.shell_environment_policy?.include_only).toEqual(expect.arrayContaining(["SLACK_BOT_TOKEN", "SANDBOX_TOKEN", "MISSING"]));
       if (withIdentity) expect(config.shell_environment_policy.include_only).toEqual(expect.arrayContaining([
         "PAPERCLIP_API_KEY", "PAPERCLIP_AGENT_PRIVATE_KEY",
       ]));

@@ -43,8 +43,7 @@ describe("resolveExecutionRunAdapterConfig", () => {
     expect(result.resolvedConfig.env).toEqual(env);
   });
 
-  it("captures scoped resolved task values and rejects configured markers", async () => {
-    const key = "PAPERCLIP_CONFIGURED_ENV_KEYS";
+  it.each(["PAPERCLIP_CONFIGURED_ENV_KEYS", "PAPERCLIP_SANDBOX_SHELL_ENV_KEYS"])("captures scoped resolved task values and rejects marker %s", async key => {
     const secret = { type: "secret_ref", secretId: "pages-secret" };
     const result = await resolveExecutionRunAdapterConfig({
       companyId: "company-1", agentId: "agent-1", environmentId: "environment-1", projectId: "project-1", routineId: "routine-1",

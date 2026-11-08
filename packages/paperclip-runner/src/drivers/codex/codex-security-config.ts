@@ -1,5 +1,5 @@
 import { usesPreconfiguredHome } from "../preconfigured-home.js";
-import { configuredEnvironmentKeys } from "../../configured-environment.js";
+import { sandboxShellEnvironmentKeys, configuredEnvironmentKeys } from "../../configured-environment.js";
 import { resolve, isAbsolute, join, dirname, delimiter, relative, sep } from "node:path";
 import { closeSync, constants, existsSync, fstatSync, openSync, realpathSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -268,6 +268,7 @@ export function createIsolatedCodexAppServerArgs(
   const networkAccess = codexNetworkAccess(source);
   const externalRunnerSandbox = usesExternalRunnerSandbox(source);
   const inheritedGitHubKeys = [
+    ...sandboxShellEnvironmentKeys(explicitSource),
     ...githubCredentialEnvironmentKeys(source),
     ...configuredEnvironmentKeys(explicitSource),
     ...["PAPERCLIP_AGENT_KEY_ID", "PAPERCLIP_AGENT_PUBLIC_KEY", "PAPERCLIP_AGENT_PRIVATE_KEY"].filter(key => source[key] !== undefined),

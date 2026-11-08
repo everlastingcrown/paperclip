@@ -1066,6 +1066,9 @@ impl SupervisedProcess {
                 command.env(key, value);
             }
         }
+        crate::configured_environment::apply_shell_environment(&mut command, |key| {
+            std::env::var(key).ok()
+        })?;
         crate::configured_environment::apply_configured_environment(&mut command, |key| {
             std::env::var(key).ok()
         })?;

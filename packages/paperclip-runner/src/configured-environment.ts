@@ -1,4 +1,29 @@
 import { AGENT_OBSERVABILITY_ENV_KEYS } from "./drivers/agent-observability.js";
+import { SANDBOX_SHELL_ENVIRONMENT_KEYS } from "./generated-sandbox-shell-environment-contract.js";
+export { SANDBOX_SHELL_ENVIRONMENT_KEYS } from "./generated-sandbox-shell-environment-contract.js";
+
+export function sandboxShellEnvironmentKeys(source: NodeJS.ProcessEnv | undefined): string[] {
+  const raw = source?.[SANDBOX_SHELL_ENVIRONMENT_KEYS];
+  if (raw === undefined) return [];
+  if (Buffer.byteLength(raw) > 20_000) throw new Error("Invalid sandbox shell environment declaration");
+  return checkedShellEnvironmentKeys(JSON.parse(raw));
+}
+
+export function sandboxShellEnvironment(source: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {};
+  const names = sandboxShellEnvironmentKeys(source);
+  let bytes = 0;
+  for (const name of names) {
+    const value = source?.[name];
+    if (value === undefined) continue;
+    bytes += Buffer.byteLength(name) + Buffer.byteLength(value);
+    if (value.includes("\0") || Buffer.byteLength(value) > 65_536 || bytes > 262_144) throw new Error("Invalid sandbox shell environment value");
+    result[name] = value;
+  }
+  if (names.length > 0) result[SANDBOX_SHELL_ENVIRONMENT_KEYS] = JSON.stringify(names);
+  return result;
+}
+
 /** Names minted by the controller from the resolved task configuration.
  * Values remain in the process environment, never in argv or this manifest.
  * Do not mint this projection from ambient process.env.
@@ -7,6 +32,7 @@ export const CONFIGURED_ENVIRONMENT_KEYS = "PAPERCLIP_CONFIGURED_ENV_KEYS";
 
 export const GENERATED_RUNTIME_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set([
   CONFIGURED_ENVIRONMENT_KEYS,
+  SANDBOX_SHELL_ENVIRONMENT_KEYS,
   ...AGENT_OBSERVABILITY_ENV_KEYS,
   "PAPERCLIP_AGENT_ID", "PAPERCLIP_AGENT_KEY_ID", "PAPERCLIP_AGENT_PUBLIC_KEY", "PAPERCLIP_AGENT_PRIVATE_KEY",
   "PAPERCLIP_API_KEY", "PAPERCLIP_API_URL", "PAPERCLIP_API_BRIDGE_MODE", "PAPERCLIP_COMPANY_ID", "PAPERCLIP_INSTANCE_ID",
@@ -41,7 +67,7 @@ function eligibleKey(key: string): boolean {
     && !/^(?:LD_|DYLD_|GIT_CONFIG_|PAPERCLIP_(?:RUNNER_|NATIVE_|GITHUB_|ACPX_|CURSOR_CLOUD_|VERIFIED_))/.test(upper);
 }
 
-function checkedNames(names: unknown): string[] {
+export function checkedShellEnvironmentKeys(names: unknown): string[] {
   if (!Array.isArray(names) || names.length > 128 || names.some(name => typeof name !== "string" || !eligibleKey(name))
     || new Set(names).size !== names.length) throw new Error("Invalid configured environment projection");
   return (names as string[]).sort();
@@ -49,18 +75,19 @@ function checkedNames(names: unknown): string[] {
 
 /** Mint at the server's resolved configuration boundary, before host inheritance. */
 export function configuredEnvironmentProjection(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const names = checkedNames(Object.keys(source).filter(key => source[key] !== undefined && eligibleKey(key)));
-  return configuredEnvironment({ ...source, [CONFIGURED_ENVIRONMENT_KEYS]: JSON.stringify(names) });
+  const names = checkedShellEnvironmentKeys(Object.keys(source).filter(key => source[key] !== undefined && eligibleKey(key)));
+  return configuredEnvironment({ ...Object.fromEntries(names.map(name => [name, source[name]])), [CONFIGURED_ENVIRONMENT_KEYS]: JSON.stringify(names) });
 }
 
 /** Accept only an explicitly supplied, controller-minted projection. */
 export function configuredEnvironment(source: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
   const raw = source?.[CONFIGURED_ENVIRONMENT_KEYS];
-  if (raw === undefined) return {};
+  const shell = sandboxShellEnvironment(source);
+  if (raw === undefined) return shell;
   if (Buffer.byteLength(raw) > 20_000) throw new Error("Invalid configured environment projection");
   let names: string[];
-  try { names = checkedNames(JSON.parse(raw)); } catch { throw new Error("Invalid configured environment projection"); }
-  const result: NodeJS.ProcessEnv = {};
+  try { names = checkedShellEnvironmentKeys(JSON.parse(raw)); } catch { throw new Error("Invalid configured environment projection"); }
+  const result: NodeJS.ProcessEnv = { ...shell };
   let bytes = 0;
   for (const name of names) {
     const value = source?.[name];
@@ -75,5 +102,5 @@ export function configuredEnvironment(source: NodeJS.ProcessEnv | undefined): No
 }
 
 export function configuredEnvironmentKeys(source: NodeJS.ProcessEnv | undefined): string[] {
-  return Object.keys(configuredEnvironment(source)).filter(key => key !== CONFIGURED_ENVIRONMENT_KEYS).sort();
+  return Object.keys(configuredEnvironment(source)).filter(key => key !== CONFIGURED_ENVIRONMENT_KEYS && key !== SANDBOX_SHELL_ENVIRONMENT_KEYS).sort();
 }

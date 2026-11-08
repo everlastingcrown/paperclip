@@ -25,6 +25,7 @@ export interface SshEnvironmentConfig {
 export type SandboxEnvironmentProvider = "fake" | (string & {});
 
 export interface FakeSandboxEnvironmentConfig {
+  shellEnvironmentKeys?: string[];
   provider: "fake";
   image: string;
   reuseLease: boolean;
@@ -43,6 +44,7 @@ export interface FakeSandboxEnvironmentConfig {
 }
 
 export interface PluginSandboxEnvironmentConfig {
+  shellEnvironmentKeys?: string[];
   provider: SandboxEnvironmentProvider;
   reuseLease: boolean;
   timeoutMs?: number;
@@ -66,6 +68,7 @@ export type SandboxEnvironmentConfig =
   | PluginSandboxEnvironmentConfig;
 
 export interface PluginEnvironmentConfig {
+  shellEnvironmentKeys?: string[];
   runnerLifecycleMode?: "inherit" | "per_turn" | "warm";
   runnerIdleTimeoutMs?: number;
   pluginKey: string;

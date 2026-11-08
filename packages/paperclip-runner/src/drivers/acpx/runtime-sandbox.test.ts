@@ -46,11 +46,13 @@ describe("ACPX runtime sandbox", () => {
       PATH: process.env.PATH, OPENAI_API_KEY: "provider-secret", HOST_SECRET: "unselected-secret",
       PAPERCLIP_OBSERVABILITY_CODEX_CONFIG: JSON.stringify({ exporter: "none", trace_exporter: "none", metrics_exporter: "none" }),
       OTEL_EXPORTER_OTLP_LOGS_HEADERS: "authorization=Bearer%20export-canary",
+      PAPERCLIP_SANDBOX_SHELL_ENV_KEYS: '["SANDBOX_TOKEN","MISSING"]',
       ...configuredEnvironmentProjection(pages), ...(identity ? { PAPERCLIP_AGENT_KEY_ID: "agent-key" } : {}),
     } });
     const config = await readFile(join(sandbox.agentHomeDirectory, "config.toml"), "utf8");
     const keys = JSON.parse(config.split("\n").find(line => line.startsWith("include_only = "))?.slice("include_only = ".length) ?? "[]");
-    expect(keys).toEqual(expect.arrayContaining(Object.keys(pages)));
+    expect(keys).toEqual(expect.arrayContaining([...Object.keys(pages), "SANDBOX_TOKEN", "MISSING"]));
+    expect(keys).not.toContain("PAPERCLIP_SANDBOX_SHELL_ENV_KEYS");
     expect(keys).not.toContain("OPENAI_API_KEY");
     expect(keys).not.toContain("HOST_SECRET");
     expect(keys).not.toContain("PAPERCLIP_OBSERVABILITY_CODEX_CONFIG");

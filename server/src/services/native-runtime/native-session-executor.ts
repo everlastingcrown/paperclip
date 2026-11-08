@@ -7602,6 +7602,7 @@ function warmNativeProcessConfigDigest(input: Parameters<typeof executePaperclip
   if (needsCoreGitHubAccess(input) || input.runnerEnvironment?.PAPERCLIP_GITHUB_BROKER_TOKEN || input.instructionWorkingCopy) return undefined;
   return nativeSha256({
     environment: configuredEnvironment(input.runnerEnvironment),
+    shellEnvironmentKeys: input.runnerEnvironment?.PAPERCLIP_SANDBOX_SHELL_ENV_KEYS ?? "[]",
     managedAiCredentialIdentity: input.managedAiCredentialIdentity ?? null,
     observabilityCompatibilityKey: input.observability?.compatibilityKey ?? null,
     githubAuthenticationMode: input.runnerEnvironment?.PAPERCLIP_GITHUB_AUTH_MODE ?? null,
@@ -10533,7 +10534,7 @@ async function executePaperclipNativeSessionWithinScope(
       ? controllerCompatibility.configDigest
       : null;
   const configuredEnvironmentDigest = createHash("sha256")
-    .update(JSON.stringify(configuredEnvironment(input.runnerEnvironment)))
+    .update(JSON.stringify([configuredEnvironment(input.runnerEnvironment), input.runnerEnvironment?.PAPERCLIP_SANDBOX_SHELL_ENV_KEYS ?? "[]"]))
     .digest("hex");
   const warmSessionOwnerToken = Symbol(
     `native-warm-session:${input.execution.binding.runId}`,

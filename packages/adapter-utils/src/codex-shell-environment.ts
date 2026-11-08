@@ -18,6 +18,7 @@ export function codexShellEnvironmentKeys(
   environment: Record<string, string>,
   configuredEnvironment: Record<string, unknown>,
   hasAgentIdentity: boolean,
+  sandboxKeys: readonly string[] = [],
 ): string[] {
   const configuredSecrets = new Set(Object.entries(configuredEnvironment)
     .filter(([key, value]) => ENVIRONMENT_NAME.test(key) && typeof value === "string" && typeof environment[key] === "string"
@@ -25,6 +26,7 @@ export function codexShellEnvironmentKeys(
       && SECRET_NAME.test(key) && !PROVIDER_ONLY_KEYS.has(key.toUpperCase()))
     .map(([key]) => key));
   return [...new Set([
+    ...sandboxKeys,
     "PATH", "HOME", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TEMP", "TMP", "CODEX_HOME",
     ...Object.keys(environment).filter(key => ENVIRONMENT_NAME.test(key) && !PROVIDER_ONLY_KEYS.has(key.toUpperCase())
       && (key === "PAPERCLIP_API_KEY" || configuredSecrets.has(key) || !SECRET_NAME.test(key))),

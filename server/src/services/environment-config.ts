@@ -1,3 +1,4 @@
+import { checkedShellEnvironmentKeys } from "../vendor/paperclip-runner/index.js";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
@@ -68,6 +69,11 @@ const sshEnvironmentConfigProbeSchema = sshEnvironmentConfigSchema.extend({
 
 const sshEnvironmentConfigPersistenceSchema = sshEnvironmentConfigProbeSchema;
 
+const shellEnvironmentKeysSchema = z.unknown().transform((value, ctx) => {
+  try { return checkedShellEnvironmentKeys(value); }
+  catch { ctx.addIssue({ code: "custom", message: "Invalid shellEnvironmentKeys declaration" }); return z.NEVER; }
+});
+
 const fakeSandboxEnvironmentConfigSchema = z.object({
   provider: z.literal("fake").default("fake"),
   image: z
@@ -77,6 +83,7 @@ const fakeSandboxEnvironmentConfigSchema = z.object({
     .default("ubuntu:24.04"),
   reuseLease: z.boolean().optional().default(false),
   streamRunLogs: z.boolean().optional(),
+  shellEnvironmentKeys: shellEnvironmentKeysSchema.optional(),
   runnerLifecycleMode: z.enum(["inherit", "per_turn", "warm"]).optional(),
   runnerIdleTimeoutMs: z.coerce
     .number()
@@ -100,6 +107,7 @@ const pluginSandboxEnvironmentConfigSchema = z.object({
   timeoutMs: z.coerce.number().int().min(1).max(86_400_000).optional(),
   reuseLease: z.boolean().optional().default(false),
   streamRunLogs: z.boolean().optional(),
+  shellEnvironmentKeys: shellEnvironmentKeysSchema.optional(),
   runnerLifecycleMode: z.enum(["inherit", "per_turn", "warm"]).optional(),
   runnerIdleTimeoutMs: z.coerce
     .number()
@@ -111,6 +119,7 @@ const pluginSandboxEnvironmentConfigSchema = z.object({
 }).catchall(z.unknown());
 
 const pluginEnvironmentConfigSchema = z.object({
+  shellEnvironmentKeys: shellEnvironmentKeysSchema.optional(),
   runnerLifecycleMode: z.enum(["inherit", "per_turn", "warm"]).optional(),
   runnerIdleTimeoutMs: z.number().int().positive().max(86_400_000).optional(),
   pluginKey: z.string().min(1),
@@ -405,6 +414,7 @@ export function stripSandboxProviderEnvelope(config: SandboxEnvironmentConfig): 
   const {
     provider: _provider,
     streamRunLogs: _streamRunLogs,
+    shellEnvironmentKeys: _shellEnvironmentKeys,
     ...driverConfig
   } = config as Record<string, unknown>;
   return driverConfig;
@@ -417,6 +427,7 @@ export function stripSandboxProviderEnvelope(config: SandboxEnvironmentConfig): 
 // environment can silently fall back to per-turn runner behavior even though
 // the caller explicitly selected a warm lifecycle.
 const HOST_OWNED_SANDBOX_FLAGS = [
+  "shellEnvironmentKeys",
   "streamRunLogs",
   "runnerLifecycleMode",
   "runnerIdleTimeoutMs",

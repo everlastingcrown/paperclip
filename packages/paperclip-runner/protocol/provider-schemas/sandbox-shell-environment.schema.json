@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "paperclip.sandbox-shell-environment.v1",
+  "type": "array",
+  "maxItems": 128,
+  "uniqueItems": true,
+  "items": {
+    "type": "string",
+    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+  },
+  "x-environment-key": "PAPERCLIP_SANDBOX_SHELL_ENV_KEYS"
+}

@@ -288,3 +288,15 @@ describe("environment config helpers", () => {
     });
   });
 });
+
+describe("sandbox shell environment names", () => {
+  it.each(["sandbox", "plugin"] as const)("preserves explicitly selected application secrets for %s", driver => {
+    const config = driver === "sandbox" ? { provider: "fake" } : { pluginKey: "test.plugin", driverKey: "test-driver" };
+    expect(normalizeEnvironmentConfig({ driver, config: { ...config, shellEnvironmentKeys: ["SERVICE_API_TOKEN", "CUSTOM_CA_PATH"] } }))
+      .toMatchObject({ shellEnvironmentKeys: ["CUSTOM_CA_PATH", "SERVICE_API_TOKEN"] });
+  });
+  it.each([null, ["*TOKEN*"], ["CUSTOM", "CUSTOM"], ["OPENAI_API_KEY"], ["PAPERCLIP_API_KEY"], ["NODE_OPTIONS"], ["OTEL_EXPORTER_OTLP_HEADERS"], Array.from({length: 129}, (_, i) => `VAR_${i}`)])
+    ("rejects invalid declarations %j", shellEnvironmentKeys => {
+      expect(() => normalizeEnvironmentConfig({ driver: "sandbox", config: { provider: "fake", shellEnvironmentKeys } })).toThrow(HttpError);
+    });
+});

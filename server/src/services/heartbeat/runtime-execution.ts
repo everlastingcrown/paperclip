@@ -1,3 +1,4 @@
+import { SANDBOX_SHELL_ENVIRONMENT_KEYS } from "../../vendor/paperclip-runner/index.js";
 import { readClaimedNativeStopRecovery } from "../native-runtime/native-cancellation-request.js";
 import { readContextCompactionRequest } from "../context-compaction.js";
 import { remoteWorkspaceFailureCause } from "../remote-workspace-transport.js";
@@ -145,6 +146,7 @@ export interface HeartbeatRuntimeExecutionInput {
   };
   config: Pick<Selection["config"], "runtimeConfig" | "resolvedConfig" | "managedAiRuntime"> & {
     resolvedInstanceSettings: { experimental: Pick<Awaited<ReturnType<ReturnType<typeof instanceSettingsService>["getExperimental"]>>, "enableWorkspaceBranchReconcileForward" | "enableWorkspaceDirtyQuarantineRepair"> };
+    shellEnvironmentKeys?: string[];
     configuredTaskEnvironment: Parameters<typeof configuredEnvironmentProjection>[0];
     adapterEnv: Parameters<typeof buildNativeProviderEnvironment>[0];
     agentIdentity: AdapterExecutionContext["agentIdentity"];
@@ -692,6 +694,7 @@ export async function executeHeartbeatRuntime(db: Db, input: HeartbeatRuntimeExe
                   executionWorkspace.cwd,
                 ),
                 ...buildAgentIdentityEnv(agentIdentity),
+                [SANDBOX_SHELL_ENVIRONMENT_KEYS]: JSON.stringify(input.config.shellEnvironmentKeys ?? []),
                 ...(input.instructions.instructionCopy && isAgentDirectoryCopy(input.instructions.instructionCopy) ? { AGENT_HOME: input.instructions.instructionCopy.executionRoot } : {}),
                 ...(nativeMcpServer
                   ? {
@@ -851,6 +854,7 @@ export async function executeHeartbeatRuntime(db: Db, input: HeartbeatRuntimeExe
             return withAdapterExecutionPhase(executionPhaseContext, "adapter_execution", () => adapter.execute({
               getFreshSessionHandoff,
               agentIdentity,
+              shellEnvironmentKeys: input.config.shellEnvironmentKeys,
               observability,
               runId: run.id,
               agent,

@@ -226,3 +226,6 @@ export const CursorCloudClient = runner.CursorCloudClient;
 export const parseNativeCursorCloudConfig = runner.parseNativeCursorCloudConfig;
 
 export const archiveCursorCloudSessionCheckpoint = runner.archiveCursorCloudSessionCheckpoint;
+
+export const SANDBOX_SHELL_ENVIRONMENT_KEYS = runner.SANDBOX_SHELL_ENVIRONMENT_KEYS;
+export const checkedShellEnvironmentKeys = runner.checkedShellEnvironmentKeys;

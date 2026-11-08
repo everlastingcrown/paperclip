@@ -2742,7 +2742,7 @@ export function heartbeatService(
       if (!executionConfiguration.prepared) return;
       const {
         mergedConfig, configSnapshot, runScopedMentionedSkillKeys, githubSelection, useHostGitHub,
-        resolvedConfig, configuredTaskEnvironment, secretKeys, secretManifest,
+        resolvedConfig, configuredTaskEnvironment, shellEnvironmentKeys, secretKeys, secretManifest,
         runtimeSkillEntries, nativeRunnerPreparationSpans, agentIdentity, observability,
       } = executionConfiguration;
       let { runtimeConfig } = executionConfiguration;
@@ -3488,6 +3488,7 @@ export function heartbeatService(
             resolvedConfig,
             resolvedInstanceSettings,
             configuredTaskEnvironment,
+            shellEnvironmentKeys,
             adapterEnv,
             agentIdentity,
             observability,

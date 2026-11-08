@@ -1,4 +1,4 @@
-import { CONFIGURED_ENVIRONMENT_KEYS, configuredEnvironment, configuredEnvironmentProjection } from './configured-environment.js';
+import { SANDBOX_SHELL_ENVIRONMENT_KEYS, checkedShellEnvironmentKeys, CONFIGURED_ENVIRONMENT_KEYS, configuredEnvironment, configuredEnvironmentProjection } from './configured-environment.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createSanitizedCodexEnvironment } from './drivers/codex/app-server-transport.js';
 import { createIsolatedCodexAppServerArgs } from './drivers/codex/codex-security-config.js';
@@ -130,5 +130,37 @@ describe("configured environment authority", () => {
         expect(prepared.GH_TOKEN).toBeUndefined();
       }
     } finally { vi.unstubAllEnvs(); }
+  });
+});
+
+describe("sandbox shell declarations", () => {
+  it.each([false, true])("allows values injected after policy construction (identity %s)", async identity => {
+    const { createSanitizedAcpxSpawnInput } = await import("./drivers/acpx/environment.js");
+    const declaration = { [SANDBOX_SHELL_ENVIRONMENT_KEYS]: '["SERVICE_API_TOKEN","CUSTOM_CA_PATH","MISSING"]',
+      ...(identity ? { PAPERCLIP_AGENT_KEY_ID: "agent-key" } : {}) };
+    const args = createIsolatedCodexAppServerArgs(declaration);
+    const keys = JSON.parse(args.find(arg => arg.startsWith("shell_environment_policy.include_only="))!.split("=", 2)[1]!);
+    expect(keys).toEqual(expect.arrayContaining(["SERVICE_API_TOKEN", "CUSTOM_CA_PATH", "MISSING"]));
+    expect(keys).not.toContain(SANDBOX_SHELL_ENVIRONMENT_KEYS);
+    const injected = { ...declaration, SERVICE_API_TOKEN: "sandbox-token", CUSTOM_CA_PATH: "/sandbox/custom-ca", HOST_SECRET: "unselected" };
+    for (const env of [createSanitizedCodexEnvironment(injected), createSanitizedAcpxSpawnInput(injected, "codex").env]) {
+      expect(env).toMatchObject({ SERVICE_API_TOKEN: "sandbox-token", CUSTOM_CA_PATH: "/sandbox/custom-ca" });
+      expect(env.MISSING).toBeUndefined();
+      expect(env.HOST_SECRET).toBeUndefined();
+    }
+    expect(args.join("\n")).not.toContain("sandbox-token");
+    expect(createSanitizedCodexEnvironment({ ...injected, [SANDBOX_SHELL_ENVIRONMENT_KEYS]: "[]" }).SERVICE_API_TOKEN).toBeUndefined();
+  });
+
+  it.each([null, "*TOKEN*", ["BAD=NAME"], ["CUSTOM", "CUSTOM"], Array.from({length: 129}, (_, i) => `VAR_${i}`),
+    ...["OPENAI_API_KEY", "NODE_OPTIONS", "PAPERCLIP_API_KEY", SANDBOX_SHELL_ENVIRONMENT_KEYS, "OTEL_EXPORTER_OTLP_HEADERS"].map(key => [key])])
+    ("rejects invalid shell names %j", names => {
+      expect(() => checkedShellEnvironmentKeys(names)).toThrow();
+      expect(() => createSanitizedCodexEnvironment({ [SANDBOX_SHELL_ENVIRONMENT_KEYS]: JSON.stringify(names) })).toThrow();
+    });
+
+  it("does not mint a sandbox declaration from configured bindings", () => {
+    expect(configuredEnvironmentProjection({ [SANDBOX_SHELL_ENVIRONMENT_KEYS]: '["SERVICE_API_TOKEN"]', SERVICE_API_TOKEN: "explicit-value" }))
+      .not.toHaveProperty(SANDBOX_SHELL_ENVIRONMENT_KEYS);
   });
 });
