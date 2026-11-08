@@ -1,7 +1,9 @@
+import { accessService } from "../../access.js";
+
 import { toConnectionGrant } from "./projection.js";
 import { actorBinding } from "../actor.js";
 import { vercelConnectResourcesFor } from "../vercel-credentials.js";
-import type { ActorInfo } from "../types.js";
+import type { ActorInfo, DbTransaction } from "../types.js";
 import { oauthConfig } from "../oauth/metadata.js";
 import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
@@ -16,6 +18,21 @@ type GrantDependencies = {
   assertSecretRefs: ReturnType<typeof createConnectionCredentialValidation>;
   vercelConnect: VercelConnectClient | null;
 };
+
+export async function assertManagedGrantReactivationAccess(
+  db: Db | DbTransaction,
+  connection: typeof toolConnections.$inferSelect,
+  grant: typeof connectionGrants.$inferSelect,
+  actor?: ActorInfo,
+) {
+  if (grant.kind === "user" || (grant.status === "active"
+    && !grant.revokedAt && !grant.revokedByUserId && !grant.revokedByAgentId)) return;
+  if (actor?.actorType === "user" && actor.actorSource === "local_implicit") return;
+  const userId = actor?.actorType === "user" && actor.actorId !== "board" ? actor.actorId : null;
+  if (!userId || !await accessService(db as Db).hasPermission(connection.companyId, "user", userId, "tools:manage_connections")) {
+    throw forbidden("Current connection-manager authority is required to reactivate this grant");
+  }
+}
 
 export function createConnectionGrants(db: Db, { getConnectionRow, assertSecretRefs, vercelConnect }: GrantDependencies) {
   return {

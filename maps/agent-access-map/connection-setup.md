@@ -284,3 +284,30 @@ remaining operations before qualifying the whole capability.
 
 Gaps: Error reporting and human repair exist; no generic agent permission to reconnect
 accounts.
+
+Custom GitHub Apps (2026-10-25) extend `connection-setup/credentials`,
+`connection-setup/identity-and-access`, `connection-setup/draft-recovery`, and
+`connection-setup/failure`. Authorized human setup uses
+`POST /api/companies/{companyId}/tools/apps/connect` and key replacement uses
+`POST /api/tool-connections/{connectionId}/reconnect`. Personal recovery belongs
+to the saved owner; shared/dedicated recovery requires current connection-manager
+permission, scoped to the saved agent for a dedicated grant. Creator access alone
+cannot restore a revoked shared/dedicated grant. Authority is checked before
+token acquisition and in the grant update transaction. Inactive grants require a submitted key and successful verification;
+recovery cannot change the saved App, installation, scope, or owner.
+
+Assigned agents use the selected bot through governed MCP tools and authorized
+managed Git/gh. Installation targets, human audience, company boundaries, grant
+status, and vault ownership remain enforced. Raw connection-token minting is
+blocked for App connections; the PEM never reaches the agent or MCP endpoint.
+Shell Git/gh authority comes from the scoped installation token and does not use
+per-tool Ask-first controls. Dedicated repository metadata is company-visible;
+metadata selection grants no credential or repository-content access.
+
+Evidence: provider-fixture lifecycle and gateway scenarios in
+[tool-access-service.test.ts](../../server/src/__tests__/tool-access-service.test.ts),
+plus authorization scenarios in
+[github-app-credentials.test.ts](../../server/src/services/github-app-credentials.test.ts).
+These do not qualify live provider execution. Full CI and the real two-App
+acceptance journey remain separate from structural map validation; see
+[Custom GitHub App credentials](../../doc/connections/GITHUB-APP.md).

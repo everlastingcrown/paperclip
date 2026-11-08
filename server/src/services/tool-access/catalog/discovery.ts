@@ -1,3 +1,4 @@
+import { isGitHubAppConnection } from "../../github-app-credentials.js";
 import { assertSupportedConnection } from "../connections/setup-policy.js";
 import { vercelCredentialFor, vercelConnectResourcesFor } from "../vercel-credentials.js";
 import { connectionSetupUrl, connectionReconnectUrl } from "../identifiers.js";
@@ -198,6 +199,14 @@ export function createToolCatalogDiscovery(db: Db, { now, audit, secrets, creden
       await response.body?.cancel().catch(() => undefined);
       throw unprocessable(INSUFFICIENT_CONNECTION_SCOPE_MESSAGE, { code: "oauth_insufficient_scope", connectionId: connection.id });
     }
+    if (response.status === 401 && isGitHubAppConnection(connection)) {
+      await response.body?.cancel().catch(() => undefined);
+      headers = {
+        ...projectedConnectionHeaders(connection),
+        ...(await resolveCredentialHeaders(connection, actor, { forceRefresh: true })),
+      };
+      response = await sendToolsList(headers);
+    }
     if (
       response.status === 401 &&
       connection.credentialSource === "vercel_connect"
@@ -251,6 +260,9 @@ export function createToolCatalogDiscovery(db: Db, { now, audit, secrets, creden
       }
     }
     if (!response.ok) {
+      if (isGitHubAppConnection(connection)) throw new HttpError(502,
+        "GitHub MCP access is unavailable. Check the installation permissions and network access to api.githubcopilot.com.",
+        { code: "github_app_mcp_unavailable", status: response.status });
       if ((response.status === 401 || response.status === 403)
         && connection.authKind === "api_key" && isMemoryConnectorId(connection.config.sourceTemplateKey)) {
         throw unprocessable("The provider rejected this API key. Check the key and its account access, then try again.", { code: "memory_api_key_rejected" });
@@ -333,6 +345,7 @@ export function createToolCatalogDiscovery(db: Db, { now, audit, secrets, creden
       response = await sendToolsList(sessionHeaders, cursor);
       if (!response.ok) throw mcpDiscoveryHttpFailure(response, "Remote MCP catalog page could not be read");
     }
+    if (isGitHubAppConnection(connection)) return descriptors.filter(tool => tool.name !== "get_me");
     if (!isRailwayConnection(connection)) return descriptors;
     if (descriptors.some((tool) => normalizeRailwayToolName(tool.name).startsWith(RAILWAY_TOOL_PREFIX))) {
       throw unprocessable("Railway advertised a reserved Paperclip action name. Refresh is blocked pending review.", { code: "railway_tool_name_collision" });
@@ -426,6 +439,7 @@ export function createToolCatalogDiscovery(db: Db, { now, audit, secrets, creden
     assertSupportedConnection(connection);
     await assertConnectorConnectionSetupEnabled(connection);
     if (connection.connectionPurpose === "ai") throw unprocessable("AI connections provide runtime authentication, not tool actions");
+    if (isGitHubAppConnection(connection)) return remoteTools(connection, undefined, actor);
     const nativeProvider = nativeProviderCatalogFor(connection);
     if (nativeProvider) {
       const headers = credentialHeaders ?? await resolveCredentialHeaders(connection, actor);
